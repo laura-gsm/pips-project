@@ -1,0 +1,457 @@
+# ============================================================
+# app.R: Screen time, social media addiction symptoms, wellbeing
+# ============================================================
+# Run with: shiny::runApp()   (install.packages("shiny") if needed)
+
+library(shiny)
+library(ggplot2)
+
+# ------------------------------------------------------------
+# CONFIGURATION: CHECK AGAINST YOUR CODEBOOK
+# ------------------------------------------------------------
+data_url <- "https://raw.githubusercontent.com/laura-gsm/pips-project/refs/heads/main/hbsc_data.csv"
+
+# ASSUMPTION (not estimated from the data): screen time is linked to the
+# combined emcsocmed2-9 score by a straight line. 0 hours = lowest observed
+# score; max_hours or more = highest observed score.
+max_hours <- 12
+
+# Outcome information. higher_is_worse and the descriptions are ASSUMED
+# from the variable names. Verify them in the codebook.
+outcome_info <- list(
+  feellow = list(
+    label = "Feeling low",
+    description = "How often you feel low or down.",
+    scale_note = "Higher values = more frequent (assumed).",
+    higher_is_worse = TRUE
+  ),
+  nervous = list(
+    label = "Feeling nervous",
+    description = "How often you feel nervous.",
+    scale_note = "Higher values = more frequent (assumed).",
+    higher_is_worse = TRUE
+  ),
+  sleepdificulty = list(
+    label = "Difficulty sleeping",
+    description = "How often you have trouble getting to sleep.",
+    scale_note = "Higher values = more frequent (assumed).",
+    higher_is_worse = TRUE
+  ),
+  physact60 = list(
+    label = "Physical activity",
+    description = "Days per week with at least 60 minutes of physical activity.",
+    scale_note = "Higher values = more active (assumed). Here, LOWER is less favourable.",
+    higher_is_worse = FALSE
+  )
+)
+
+# Cut-offs for the position bar (percentile of "less favourable" outcome)
+# 0-25 = below average, 25-75 = average, 75-90 = above, 90-100 = very above
+cutoffs <- c(25, 75, 90)
+
+# Colours
+status_colors <- c(
+  below      = "#2E9E6B",
+  average    = "#E7B93C",
+  above      = "#E8833A",
+  very_above = "#C8423B",
+  neutral    = "#7F8C9A"
+)
+
+# ------------------------------------------------------------
+# DATA SET-UP (same logic as the analysis script)
+# ------------------------------------------------------------
+df <- read.csv(data_url, row.names = NULL)
+
+addiction_items <- paste0("emcsocmed", 2:9)
+social_vars_all <- c("emcsocmed1", "socmed_addication_sympt")
+outcome_vars    <- names(outcome_info)
+
+missing_vars <- setdiff(c("emcsocmed1", addiction_items, outcome_vars), names(df))
+if (length(missing_vars) > 0) {
+  stop("Variables not found in the data: ",
+       paste(missing_vars, collapse = ", "))
+}
+
+# Combine emcsocmed2-9 into one sum score (NA if any item is missing)
+df$socmed_addication_sympt <- rowSums(df[addiction_items])
+
+score_range <- range(df$socmed_addication_sympt, na.rm = TRUE)
+
+hours_to_score <- function(hours) {
+  score_range[1] + pmin(hours / max_hours, 1) * diff(score_range)
+}
+
+# ------------------------------------------------------------
+# ASSOCIATIONS FROM THE ANALYSIS SCRIPT
+# ------------------------------------------------------------
+# Spearman correlations, BH correction across all 8 tests (section 8).
+spearman_one <- function(x_var, y_var) {
+  d <- na.omit(df[, c(x_var, y_var)])
+  test <- cor.test(d[[x_var]], d[[y_var]], method = "spearman", exact = FALSE)
+  data.frame(social_variable = x_var, outcome = y_var, n = nrow(d),
+             rho = unname(test$estimate), p_value = test$p.value)
+}
+
+grid <- expand.grid(x = social_vars_all, y = outcome_vars,
+                    stringsAsFactors = FALSE)
+cor_results <- do.call(rbind, Map(spearman_one, grid$x, grid$y))
+rownames(cor_results) <- NULL
+cor_results$p_adjusted <- p.adjust(cor_results$p_value, method = "BH")
+
+# Simple regression per outcome: outcome ~ combined score
+models <- lapply(setNames(outcome_vars, outcome_vars), function(o) {
+  model_data <- na.omit(df[, c(o, "socmed_addication_sympt")])
+  lm(reformulate("socmed_addication_sympt", response = o), data = model_data)
+})
+
+# ------------------------------------------------------------
+# MESSAGES
+# ------------------------------------------------------------
+status_title <- c(
+  below      = "Nice!",
+  average    = "That's okay, I guess.",
+  above      = "Maybe reduce?",
+  very_above = "Please seek help.",
+  neutral    = "No clear link"
+)
+
+status_text <- function(status, label, hours) {
+  switch(
+    status,
+    below = paste0(
+      "At ", hours, " h/day, your predicted result for \"", label,
+      "\" is better than most respondents'. Keep doing what works for you."
+    ),
+    average = paste0(
+      "At ", hours, " h/day, your predicted result for \"", label,
+      "\" is about average. Nothing alarming, but small changes can still help."
+    ),
+    above = paste0(
+      "At ", hours, " h/day, your predicted result for \"", label,
+      "\" is less favourable than average. If you want to improve it, ",
+      "you could try cutting back your screen time a little."
+    ),
+    very_above = paste0(
+      "At ", hours, " h/day, your predicted result for \"", label,
+      "\" is much less favourable than most respondents'. This is not a ",
+      "diagnosis, but if you are struggling, please talk to someone you ",
+      "trust or to a health professional (for example a GP or school counsellor)."
+    ),
+    neutral = paste0(
+      "In this dataset, the combined social media score is not significantly ",
+      "associated with \"", label, "\" after correction for multiple testing. ",
+      "So we cannot say how your screen time relates to it."
+    )
+  )
+}
+
+# ------------------------------------------------------------
+# STYLE
+# ------------------------------------------------------------
+css <- "
+body { background: #f4f6fa; color: #1f2d3d; }
+.app-header { padding: 18px 0 6px 0; }
+.app-header h2 { font-weight: 700; margin-bottom: 2px; }
+.app-header p { color: #5b6b7c; }
+.card { background: white; border-radius: 14px; padding: 16px 20px;
+        box-shadow: 0 2px 10px rgba(0,0,0,.07); margin-bottom: 16px; }
+.card h4 { margin-top: 0; font-weight: 700; }
+.status-card { border-left: 8px solid #7F8C9A; }
+.status-title { font-size: 26px; font-weight: 800; margin: 0 0 4px 0; }
+.small-note { color: #6b7a8a; font-size: 12.5px; }
+.btn-primary { width: 100%; margin-top: 10px; font-weight: 600; }
+.nav-tabs { margin-bottom: 10px; }
+details summary { cursor: pointer; font-weight: 600; }
+"
+
+theme_app <- function() {
+  theme_minimal(base_size = 13) +
+    theme(
+      plot.title = element_text(face = "bold", size = 15),
+      plot.subtitle = element_text(colour = "grey35"),
+      panel.grid.minor = element_blank(),
+      panel.grid.major = element_line(colour = "grey90"),
+      plot.margin = margin(10, 15, 10, 10),
+      axis.title = element_text(colour = "grey25")
+    )
+}
+
+# ------------------------------------------------------------
+# USER INTERFACE
+# ------------------------------------------------------------
+ui <- fluidPage(
+  tags$head(tags$style(HTML(css))),
+  
+  div(class = "app-header",
+      h2("Screen time & wellbeing"),
+      p("See how your daily screen time relates to a health outcome, ",
+        "based on survey data.")),
+  
+  fluidRow(
+    column(
+      4,
+      div(
+        class = "card",
+        h4("Your input"),
+        sliderInput("hours", "Daily screen time (hours):",
+                    min = 0, max = max_hours, value = 3, step = 0.5),
+        selectInput(
+          "outcome", "Health outcome:",
+          choices = setNames(outcome_vars,
+                             vapply(outcome_info, function(x) x$label, ""))
+        ),
+        actionButton("show", "Show my result", class = "btn-primary btn-lg"),
+        hr(),
+        p(class = "small-note",
+          "Assumption: more screen time goes together with a higher social ",
+          "media addiction symptom score (emcsocmed2-9 combined). This link ",
+          "is assumed, not calculated from the data.")
+      )
+    ),
+    
+    column(
+      8,
+      uiOutput("outcome_card"),
+      uiOutput("status_card"),
+      div(class = "card", plotOutput("position_plot", height = "170px")),
+      div(
+        class = "card",
+        tabsetPanel(
+          tabPanel("Association", plotOutput("assoc_plot", height = "380px")),
+          tabPanel("Distribution", plotOutput("dist_plot", height = "380px"))
+        )
+      ),
+      uiOutput("details_card")
+    )
+  )
+)
+
+# ------------------------------------------------------------
+# SERVER
+# ------------------------------------------------------------
+server <- function(input, output, session) {
+  
+  res <- reactive({
+    o <- input$outcome
+    info <- outcome_info[[o]]
+    score <- hours_to_score(input$hours)
+    model <- models[[o]]
+    
+    pred <- predict(model,
+                    newdata = data.frame(socmed_addication_sympt = score),
+                    interval = "prediction", level = 0.95)
+    fit_raw <- pred[1, "fit"]
+    
+    rng <- range(df[[o]], na.rm = TRUE)
+    clamp <- function(x) pmin(pmax(x, rng[1]), rng[2])
+    
+    # Position among all respondents: percentile of the "less favourable" side
+    direction <- if (info$higher_is_worse) 1 else -1
+    all_scores <- df$socmed_addication_sympt[!is.na(df$socmed_addication_sympt)]
+    all_pred <- direction * predict(
+      model, newdata = data.frame(socmed_addication_sympt = all_scores)
+    )
+    v <- direction * fit_raw
+    pct <- 100 * (mean(all_pred < v) + mean(all_pred <= v)) / 2
+    
+    cor_row <- cor_results[
+      cor_results$social_variable == "socmed_addication_sympt" &
+        cor_results$outcome == o, ]
+    significant <- !is.na(cor_row$p_adjusted) && cor_row$p_adjusted < 0.05
+    
+    status <- if (!significant) {
+      "neutral"
+    } else if (pct < cutoffs[1]) {
+      "below"
+    } else if (pct < cutoffs[2]) {
+      "average"
+    } else if (pct < cutoffs[3]) {
+      "above"
+    } else {
+      "very_above"
+    }
+    
+    list(
+      o = o, info = info, score = score,
+      fit = clamp(fit_raw), lwr = clamp(pred[1, "lwr"]), upr = clamp(pred[1, "upr"]),
+      mean_outcome = mean(df[[o]], na.rm = TRUE),
+      slope = unname(coef(model)[2]),
+      r2 = summary(model)$r.squared,
+      rho = cor_row$rho, p_adj = cor_row$p_adjusted, n = cor_row$n,
+      pct = pct, status = status, color = status_colors[[status]]
+    )
+  })
+  
+  # ---- Outcome card ----------------------------------------
+  output$outcome_card <- renderUI({
+    r <- res()
+    div(
+      class = "card",
+      h4(r$info$label),
+      p(r$info$description),
+      p(class = "small-note", r$info$scale_note)
+    )
+  })
+  
+  # ---- Status card -----------------------------------------
+  output$status_card <- renderUI({
+    r <- res()
+    div(
+      class = "card status-card",
+      style = paste0("border-left-color:", r$color, ";"),
+      div(class = "status-title", style = paste0("color:", r$color, ";"),
+          status_title[[r$status]]),
+      p(status_text(r$status, r$info$label, input$hours)),
+      p(strong("Predicted value: "), round(r$fit, 1),
+        span(class = "small-note",
+             paste0("  (dataset average: ", round(r$mean_outcome, 1), ")")))
+    )
+  })
+  
+  # ---- Position bar ----------------------------------------
+  output$position_plot <- renderPlot({
+    r <- res()
+    zones <- data.frame(
+      xmin = c(0, cutoffs),
+      xmax = c(cutoffs, 100),
+      label = c("Below\naverage", "Average", "Above\naverage", "Very\nabove"),
+      fill = unname(status_colors[c("below", "average", "above", "very_above")])
+    )
+    
+    ggplot() +
+      geom_rect(data = zones,
+                aes(xmin = xmin, xmax = xmax, ymin = 0, ymax = 1, fill = fill),
+                colour = "white", linewidth = 1.5) +
+      geom_text(data = zones,
+                aes(x = (xmin + xmax) / 2, y = 0.5, label = label),
+                colour = "white", fontface = "bold", size = 3.6,
+                lineheight = 0.9) +
+      scale_fill_identity() +
+      annotate("segment", x = r$pct, xend = r$pct, y = 0, yend = 1.15,
+               colour = "#1f2d3d", linewidth = 1.2) +
+      annotate("point", x = r$pct, y = 1.18, shape = 25, size = 6,
+               fill = "#1f2d3d", colour = "#1f2d3d") +
+      annotate("label", x = r$pct, y = 1.55, label = "You",
+               fill = "#1f2d3d", colour = "white", fontface = "bold",
+               label.size = 0) +
+      annotate("text", x = 0, y = -0.22, label = "Better than most",
+               hjust = 0, colour = "grey35", size = 3.6) +
+      annotate("text", x = 100, y = -0.22, label = "Less favourable than most",
+               hjust = 1, colour = "grey35", size = 3.6) +
+      scale_x_continuous(limits = c(0, 100), expand = c(0.005, 0)) +
+      coord_cartesian(ylim = c(-0.4, 1.8), clip = "off") +
+      labs(title = "Where you stand compared with other respondents") +
+      theme_void(base_size = 13) +
+      theme(plot.title = element_text(face = "bold", size = 15),
+            plot.margin = margin(5, 15, 5, 15))
+  })
+  
+  # ---- Association plot ------------------------------------
+  output$assoc_plot <- renderPlot({
+    r <- res()
+    plot_data <- na.omit(data.frame(
+      x = df$socmed_addication_sympt,
+      y = df[[r$o]]
+    ))
+    set.seed(1)
+    if (nrow(plot_data) > 3000) {
+      plot_data <- plot_data[sample(nrow(plot_data), 3000), ]
+    }
+    
+    ggplot(plot_data, aes(x = x, y = y)) +
+      geom_jitter(width = 0.2, height = 0.2, alpha = 0.18, size = 1,
+                  colour = "#6C7A89") +
+      geom_smooth(method = "lm", formula = y ~ x, colour = "#2B6CB0",
+                  fill = "#2B6CB0", alpha = 0.15, linewidth = 1.3) +
+      annotate("point", x = r$score, y = r$fit, shape = 21, size = 7,
+               fill = r$color, colour = "white", stroke = 1.8) +
+      annotate("label", x = r$score, y = r$fit, label = "You",
+               fill = r$color, colour = "white", fontface = "bold",
+               vjust = -1, label.size = 0) +
+      labs(
+        title = paste0(r$info$label, " by social media score"),
+        subtitle = paste0("Spearman rho = ", round(r$rho, 2),
+                          ";  dots are a sample of respondents"),
+        x = "Combined social media score (emcsocmed2-9) \u2192 more symptoms",
+        y = r$info$label
+      ) +
+      theme_app()
+  })
+  
+  # ---- Distribution plot -----------------------------------
+  output$dist_plot <- renderPlot({
+    r <- res()
+    d <- na.omit(data.frame(y = df[[r$o]]))
+    
+    ggplot(d, aes(x = y)) +
+      geom_histogram(bins = min(30, length(unique(d$y))),
+                     fill = "#A9C5E8", colour = "white") +
+      geom_vline(xintercept = r$mean_outcome, linetype = "dashed",
+                 colour = "grey35", linewidth = 0.9) +
+      geom_vline(xintercept = r$fit, colour = r$color, linewidth = 1.6) +
+      annotate("label", x = r$fit, y = Inf, label = "Your prediction",
+               fill = r$color, colour = "white", fontface = "bold",
+               vjust = 1.4, label.size = 0) +
+      annotate("text", x = r$mean_outcome, y = Inf, label = "Average",
+               colour = "grey30", vjust = 3.6, hjust = -0.15, size = 3.8) +
+      labs(
+        title = paste0("How respondents score on: ", r$info$label),
+        subtitle = r$info$scale_note,
+        x = r$info$label, y = "Number of respondents"
+      ) +
+      theme_app()
+  })
+  
+  # ---- Details ---------------------------------------------
+  output$details_card <- renderUI({
+    r <- res()
+    p_text <- if (r$p_adj < 0.001) "< .001" else paste("=", round(r$p_adj, 3))
+    div(
+      class = "card",
+      tags$details(
+        tags$summary("Statistical details"),
+        tags$ul(
+          tags$li("Screen time entered: ", input$hours, " h/day, corresponding ",
+                  "to an assumed combined score of ", round(r$score, 1),
+                  " (observed range ", score_range[1], " to ",
+                  score_range[2], ")."),
+          tags$li("Spearman rho = ", round(r$rho, 3), ", BH-adjusted p ", p_text,
+                  ", n = ", format(r$n, big.mark = ","), "."),
+          tags$li("Per 1-point increase in the score: ",
+                  round(r$slope, 3), " on the outcome scale (R-squared = ",
+                  round(r$r2, 3), ")."),
+          tags$li("95% prediction interval: ", round(r$lwr, 1), " to ",
+                  round(r$upr, 1), "."),
+          tags$li("Position: ", round(r$pct), "th percentile of the less ",
+                  "favourable side (cut-offs at ",
+                  paste(cutoffs, collapse = ", "), ").")
+        ),
+        p(class = "small-note",
+          "Associations do not demonstrate causation, and this is not a ",
+          "diagnosis. The prediction is an average for people with the same ",
+          "score; individual outcomes vary widely.")
+      )
+    )
+  })
+  
+  # ---- Pop-up window ---------------------------------------
+  observeEvent(input$show, {
+    r <- res()
+    showModal(modalDialog(
+      title = tags$span(
+        style = paste0("color:", r$color, "; font-weight:800; font-size:26px;"),
+        status_title[[r$status]]
+      ),
+      p(strong(r$info$label), " at ", input$hours, " h/day"),
+      p(status_text(r$status, r$info$label, input$hours)),
+      p(class = "small-note",
+        "Based on an association in survey data. Not a diagnosis."),
+      easyClose = TRUE,
+      footer = modalButton("Close"),
+      size = "m"
+    ))
+  })
+}
+
+shinyApp(ui, server)
