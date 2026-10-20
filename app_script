@@ -11,6 +11,11 @@ library(ggplot2)
 # ------------------------------------------------------------
 data_url <- "https://raw.githubusercontent.com/laura-gsm/pips-project/refs/heads/main/hbsc_data.csv"
 
+# NEW: coding of the emcsocmed items in the raw data.
+# Default assumes 1 = yes and 2 = no. If the items are coded 0/1, set no_code <- 0.
+yes_code <- 1
+no_code  <- 2
+
 # ASSUMPTION (not estimated from the data): screen time is linked to the
 # combined emcsocmed2-9 score by a straight line. 0 hours = lowest observed
 # score; max_hours or more = highest observed score.
@@ -49,7 +54,6 @@ outcome_info <- list(
 # 0-25 = below average, 25-75 = average, 75-90 = above, 90-100 = very above
 cutoffs <- c(25, 75, 90)
 
-# Colours
 status_colors <- c(
   below      = "#2E9E6B",
   average    = "#E7B93C",
@@ -63,17 +67,40 @@ status_colors <- c(
 # ------------------------------------------------------------
 df <- read.csv(data_url, row.names = NULL)
 
+all_items       <- paste0("emcsocmed", 1:9)
 addiction_items <- paste0("emcsocmed", 2:9)
 social_vars_all <- c("emcsocmed1", "socmed_addication_sympt")
 outcome_vars    <- names(outcome_info)
 
-missing_vars <- setdiff(c("emcsocmed1", addiction_items, outcome_vars), names(df))
+missing_vars <- setdiff(c(all_items, outcome_vars), names(df))
 if (length(missing_vars) > 0) {
   stop("Variables not found in the data: ",
        paste(missing_vars, collapse = ", "))
 }
 
-# Combine emcsocmed2-9 into one sum score (NA if any item is missing)
+# ---- FIXED: recode items to 1 = yes, 0 = no BEFORE summing ----
+item_values <- unlist(df[all_items])
+message("Item values found in the data: ",
+        paste(sort(unique(na.omit(item_values))), collapse = ", "))
+
+if (!any(item_values %in% c(yes_code, no_code))) {
+  stop("None of the emcsocmed values match yes_code/no_code. ",
+       "Check the coding in the codebook and update the configuration.")
+}
+
+n_unrecognised <- sum(!is.na(item_values) & !(item_values %in% c(yes_code, no_code)))
+if (n_unrecognised > 0) {
+  message(n_unrecognised, " item responses with other values (e.g. missing codes) ",
+          "were set to NA.")
+}
+
+df[all_items] <- lapply(df[all_items], function(x) {
+  ifelse(x == yes_code, 1, ifelse(x == no_code, 0, NA))
+})
+
+# Combine emcsocmed2-9 into one sum score:
+# number of "yes" answers (0-8), higher = more symptoms.
+# NA if any of the 8 items is missing.
 df$socmed_addication_sympt <- rowSums(df[addiction_items])
 
 score_range <- range(df$socmed_addication_sympt, na.rm = TRUE)
@@ -104,6 +131,17 @@ models <- lapply(setNames(outcome_vars, outcome_vars), function(o) {
   model_data <- na.omit(df[, c(o, "socmed_addication_sympt")])
   lm(reformulate("socmed_addication_sympt", response = o), data = model_data)
 })
+
+# ---- NEW: sanity check printed in the R console at startup ----
+for (o in outcome_vars) {
+  direction <- if (outcome_info[[o]]$higher_is_worse) 1 else -1
+  rho <- cor_results$rho[
+    cor_results$social_variable == "socmed_addication_sympt" &
+      cor_results$outcome == o]
+  message(sprintf(
+    "CHECK %-15s rho = %5.2f -> more symptoms go with %s values of this outcome",
+    o, rho, if (direction * rho > 0) "WORSE" else "BETTER"))
+}
 
 # ------------------------------------------------------------
 # MESSAGES
@@ -373,7 +411,7 @@ server <- function(input, output, session) {
         title = paste0(r$info$label, " by social media score"),
         subtitle = paste0("Spearman rho = ", round(r$rho, 2),
                           ";  dots are a sample of respondents"),
-        x = "Combined social media score (emcsocmed2-9) \u2192 more symptoms",
+        x = "Social media addiction symptoms (number of 'yes' on emcsocmed2-9)",
         y = r$info$label
       ) +
       theme_app()
