@@ -6,10 +6,11 @@
 getwd()
 actualdata=read.csv("https://raw.githubusercontent.com/laura-gsm/pips-project/refs/heads/main/hbsc_data.csv", row.names = NULL)
 View(actualdata)
-# Independent variables: emcsocmed1 - emcsocmed9
-# Dependent variables:
-# feellow, irritable, nervous, sleepdificulty, lifesat,
-# physact60, headache, stomachache, backache, dizzy
+# Independent variables:                                       
+#   emcsocmed1 and socmed_addication_sympt                      
+#   (socmed_addication_sympt = sum of emcsocmed2 - emcsocmed9)  
+# Dependent variables:                                          
+#   feellow, nervous, sleepdificulty, physact60  
 #
 # Outputs are saved in: social_media_analysis_results
 #
@@ -17,7 +18,7 @@ View(actualdata)
 # - Associations do not demonstrate causation.
 # - Linear regression may not be appropriate for ordinal,
 #   binary, or count outcomes. Review outcome types first.
-# - Cronbach's alpha is meaningful only if the nine social
+# - Cronbach's alpha is meaningful only if the eight social
 #   media items are intended to measure one underlying scale.
 # ============================================================
 
@@ -57,19 +58,28 @@ if (!exists("actualdata")) {
 
 df <- actualdata
 
-social_vars <- paste0("emcsocmed", 1:9)
+addiction_items <- paste0("emcsocmed", 2:9)
+
+missing_items <- setdiff(c("emcsocmed1", addiction_items), names(df))
+
+if (length(missing_items) > 0) {
+  stop(
+    "These items were not found in actualdata: ",
+    paste(missing_items, collapse = ", ")
+  )
+}
+
+#combine emcsocmed2-9 into one sum score
+# (NA if any of the 8 items is missing)
+df$socmed_addication_sympt <- rowSums(df[addiction_items])
+
+social_vars <- c("emcsocmed1", "socmed_addication_sympt")
 
 outcome_vars <- c(
   "feellow",
-  "irritable",
   "nervous",
   "sleepdificulty",
-  "lifesat",
-  "physact60",
-  "headache",
-  "stomachache",
-  "backache",
-  "dizzy"
+  "physact60"
 )
 
 all_vars <- c(social_vars, outcome_vars)
@@ -363,7 +373,8 @@ ggsave(
 
 
 # ============================================================
-# 8. SPEARMAN CORRELATIONS: ALL 90 ASSOCIATIONS
+# 8. SPEARMAN CORRELATIONS: ALL 8 ASSOCIATIONS       
+#    (2 social media predictors x 4 outcomes)
 # ============================================================
 
 # Spearman correlation measures monotonic association.
@@ -441,7 +452,7 @@ cor_results <- expand_grid(
   select(result) %>%
   unnest(result) %>%
   mutate(
-    # Benjamini-Hochberg correction across all 90 tests.
+    # Benjamini-Hochberg correction across all 8 tests.
     p_adjusted = p.adjust(p_value, method = "BH"),
     significant_adjusted = !is.na(p_adjusted) &
       p_adjusted < 0.05
@@ -515,7 +526,7 @@ correlation_heatmap <- ggplot(
     title = "Spearman Correlations: Social Media and Outcomes",
     subtitle = "* indicates BH-adjusted p < .05",
     x = "Outcome",
-    y = "Social media item",
+    y = "Social media variable",
     fill = "Spearman rho"
   ) +
   theme_minimal(base_size = 10) +
@@ -529,26 +540,26 @@ correlation_heatmap <- ggplot(
 ggsave(
   file.path(output_dir, "correlation_heatmap.png"),
   plot = correlation_heatmap,
-  width = 12,
-  height = 7,
+  width = 8,                                              
+  height = 4,
   dpi = 300
 )
 
 
 # ============================================================
-# 10. PLOT THE 20 ASSOCIATIONS WITH THE SMALLEST ADJUSTED P-VALUES
+# 10. PLOT ALL ASSOCIATIONS RANKED BY ADJUSTED P-VALUE   
 # ============================================================
 
-# These are the smallest adjusted p-values among the tested
-# associations, not necessarily the largest effect sizes.
+# Bars are ordered by adjusted p-value (smallest at the top),
+# not by effect size. All 8 associations are shown.
+# * indicates BH-adjusted p < .05.
 
-top_correlations <- cor_results %>%
+all_correlations <- cor_results %>%                        
   filter(
     !is.na(p_adjusted),
     !is.na(rho)
   ) %>%
-  arrange(p_adjusted) %>%
-  slice_head(n = 20) %>%
+  arrange(p_adjusted) %>%                                   
   mutate(
     association = paste(
       social_variable,
@@ -558,18 +569,19 @@ top_correlations <- cor_results %>%
     association = factor(
       association,
       levels = rev(association)
-    )
+    ),
+    significance_label = ifelse(p_adjusted < 0.05, "*", "")  
   )
 
 write_csv(
-  top_correlations,
-  file.path(output_dir, "top_20_correlations.csv")
+  all_correlations,
+  file.path(output_dir, "all_correlations_ranked.csv")      
 )
 
-if (nrow(top_correlations) > 0) {
+if (nrow(all_correlations) > 0) {
   
-  top_correlation_plot <- ggplot(
-    top_correlations,
+  all_correlation_plot <- ggplot(
+    all_correlations,
     aes(
       x = association,
       y = rho,
@@ -577,6 +589,11 @@ if (nrow(top_correlations) > 0) {
     )
   ) +
     geom_col() +
+    geom_text(                                              
+      aes(label = significance_label),
+      hjust = ifelse(all_correlations$rho >= 0, -0.3, 1.3),
+      size = 5
+    ) +
     coord_flip() +
     scale_fill_gradient2(
       low = "firebrick3",
@@ -585,25 +602,26 @@ if (nrow(top_correlations) > 0) {
       midpoint = 0
     ) +
     labs(
-      title = "20 Associations with the Smallest Adjusted P-values",
-      x = "Social media item - outcome",
+      title = "All Associations Ranked by Adjusted P-value",    
+      subtitle = "* indicates BH-adjusted p < .05",             
+      x = "Social media variable - outcome",
       y = "Spearman rho",
       fill = "Spearman rho"
     ) +
     theme_minimal(base_size = 10)
   
   ggsave(
-    file.path(output_dir, "top_correlations.png"),
-    plot = top_correlation_plot,
+    file.path(output_dir, "all_correlations_ranked.png"),   
+    plot = all_correlation_plot,                            
     width = 10,
-    height = 8,
+    height = 6,
     dpi = 300
   )
 }
 
 
 # ============================================================
-# 11. COMBINED SCATTERPLOT: 90 PANELS
+# 11. COMBINED SCATTERPLOT: 8 PANELS
 # ============================================================
 
 # Creates a plot for each social media item-outcome pair.
@@ -674,26 +692,26 @@ scatter_plot <- ggplot(
     scales = "free"
   ) +
   labs(
-    title = "Social Media Items and Outcomes",
+    title = "Social Media Variable and Outcomes",
     subtitle = paste(
-      "Scatterplots for all 90 pairs;",
+      "Scatterplots for all 8 pairs;",
       "plotting observations:",
       nrow(scatter_data)
     ),
     x = "Social media response",
     y = "Outcome response"
   ) +
-  theme_minimal(base_size = 7) +
+  theme_minimal(base_size = 9) +
   theme(
-    axis.text = element_text(size = 5),
-    strip.text = element_text(size = 6)
+    axis.text = element_text(size = 7),
+    strip.text = element_text(size = 8)
   )
 
 ggsave(
   file.path(output_dir, "combined_scatterplots.png"),
   plot = scatter_plot,
-  width = 18,
-  height = 13,
+  width = 12,
+  height = 6,
   dpi = 300
 )
 
@@ -702,7 +720,8 @@ ggsave(
 # 12. MULTIPLE LINEAR REGRESSION MODELS
 # ============================================================
 
-# Each model includes all nine social media items as predictors.
+# Each model includes emcsocmed1 and socmed_addication_sympt   
+# as predictors.
 #
 # Interpretation caution:
 # - These models assume a numeric outcome suitable for linear
@@ -710,8 +729,6 @@ ggsave(
 # - Binary outcomes usually need logistic regression.
 # - Count outcomes may need Poisson or negative binomial models.
 # - Ordinal outcomes may need ordinal regression.
-#
-# Review your outcome coding before interpreting coefficients.
 
 regression_results_list <- list()
 vif_results_list <- list()
@@ -1107,8 +1124,8 @@ if (
         "regression_coefficient_plot.png"
       ),
       plot = coefficient_plot,
-      width = 12,
-      height = 14,
+      width = 10,
+      height = 6,
       dpi = 300
     )
   }
@@ -1116,7 +1133,7 @@ if (
 
 
 # ============================================================
-# 15. CRONBACH'S ALPHA FOR THE NINE SOCIAL MEDIA ITEMS
+# 15. CRONBACH'S ALPHA FOR THE EIGHT ITEMS (emcsocmed2 - 9)
 # ============================================================
 
 # Only interpret Cronbach's alpha if these nine items are
@@ -1126,7 +1143,7 @@ if (
 # alpha, if appropriate for your questionnaire.
 
 social_scale_data <- df %>%
-  select(all_of(social_vars))
+  select(all_of(addiction_items))
 
 if (
   nrow(social_scale_data) >= 3 &&
@@ -1160,7 +1177,7 @@ if (
       raw_alpha = alpha_result$total$raw_alpha,
       standardized_alpha = alpha_result$total$std.alpha,
       average_r = alpha_result$total$average_r,
-      number_of_items = length(social_vars)
+      number_of_items = length(addiction_items)
     )
     
     write_csv(
