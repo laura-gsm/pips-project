@@ -1,0 +1,442 @@
+# ============================================================
+# SHINY APP: SCREEN TIME, PLATFORM, SLEEP AND MENTAL HEALTH
+# ============================================================
+# The user ticks the platform(s) they use, sets their daily
+# screen time, and sees predicted sleep, GAD-7 and PHQ-9.
+#
+# Predictions come from the same models as the analysis script:
+#   outcome ~ Daily_Screen_Time_Hours + platform   (lm)
+# with the most common platform as the reference group, and
+# platforms with fewer than 30 respondents removed.
+#
+# Run with:  shiny::runApp("path/to/folder/containing/app.R")
+#
+# IMPORTANT: these are statistical associations, not causal
+# effects, and not a diagnosis. Individual scores vary a lot
+# around the predictions.
+# ============================================================
+
+required_packages <- c("shiny", "ggplot2", "dplyr", "stringr")
+for (pkg in required_packages) {
+  if (!requireNamespace(pkg, quietly = TRUE)) install.packages(pkg)
+}
+
+library(shiny)
+library(ggplot2)
+library(dplyr)
+library(stringr)
+
+
+# ------------------------------------------------------------
+# 1. LOAD DATA
+# ------------------------------------------------------------
+# Tries the GitHub URL first. If you are offline, put a copy of
+# the CSV next to app.R and name it as below.
+
+DATA_URL <- paste0(
+  "https://raw.githubusercontent.com/laura-gsm/pips-project/",
+  "c075d4ef653730e296b8c88f17539d9b260b8d35/",
+  "social_media_mental_health%202.csv"
+)
+LOCAL_FILE <- "social_media_mental_health 2.csv"
+
+actualdata <- tryCatch(
+  read.csv(DATA_URL, stringsAsFactors = FALSE),
+  error = function(e) NULL
+)
+if (is.null(actualdata) && file.exists(LOCAL_FILE)) {
+  actualdata <- read.csv(LOCAL_FILE, stringsAsFactors = FALSE)
+}
+if (is.null(actualdata)) {
+  stop("Could not load the dataset from the URL or from '", LOCAL_FILE, "'.")
+}
+
+df <- actualdata
+
+
+# ------------------------------------------------------------
+# 2. VARIABLES (same as the analysis script)
+# ------------------------------------------------------------
+
+screen_var <- "Daily_Screen_Time_Hours"
+outcome_vars <- c("Sleep_Duration_Hours", "GAD_7_Score", "PHQ_9_Score")
+min_group_n <- 30
+platform_var <- NULL   # NULL = detect a column containing "platform"
+
+missing_vars <- setdiff(c(screen_var, outcome_vars), names(df))
+if (length(missing_vars) > 0) {
+  stop("Variables not found: ", paste(missing_vars, collapse = ", "))
+}
+
+if (is.null(platform_var)) {
+  candidates <- grep("platform", names(df), ignore.case = TRUE, value = TRUE)
+  if (length(candidates) != 1) {
+    stop("Could not identify the platform column. Set platform_var manually. ",
+         "Columns: ", paste(names(df), collapse = ", "))
+  }
+  platform_var <- candidates
+}
+
+platform_raw <- str_squish(as.character(df[[platform_var]]))
+platform_raw[platform_raw == ""] <- NA
+
+platform_table_raw <- sort(table(platform_raw), decreasing = TRUE)
+keep_levels <- names(platform_table_raw)[platform_table_raw >= min_group_n]
+
+df$platform <- factor(
+  ifelse(platform_raw %in% keep_levels, platform_raw, NA),
+  levels = keep_levels
+)
+
+if (nlevels(df$platform) < 2) {
+  stop("Fewer than 2 platforms with at least ", min_group_n, " respondents.")
+}
+
+ref_platform <- levels(df$platform)[1]
+platform_n <- table(df$platform)
+
+# Observed range of screen time (used for the slider)
+screen_min <- floor(min(df[[screen_var]], na.rm = TRUE))
+screen_max <- ceiling(max(df[[screen_var]], na.rm = TRUE))
+screen_mean <- round(mean(df[[screen_var]], na.rm = TRUE), 1)
+
+
+# ------------------------------------------------------------
+# 3. FIT THE MODELS
+# ------------------------------------------------------------
+
+outcome_info <- list(
+  Sleep_Duration_Hours = list(label = "Sleep duration", unit = "hours",
+                              lower = 0, upper = 24),
+  GAD_7_Score = list(label = "Anxiety (GAD-7)", unit = "points (0\u201321)",
+                     lower = 0, upper = 21),
+  PHQ_9_Score = list(label = "Depression (PHQ-9)", unit = "points (0\u201327)",
+                     lower = 0, upper = 27)
+)
+
+models <- lapply(outcome_vars, function(y) {
+  d <- df %>%
+    select(all_of(c(y, screen_var, "platform"))) %>%
+    tidyr::drop_na()
+  lm(reformulate(c(screen_var, "platform"), response = y), data = d)
+})
+names(models) <- outcome_vars
+
+model_summary_table <- do.call(rbind, lapply(outcome_vars, function(y) {
+  s <- summary(models[[y]])
+  data.frame(
+    Outcome = outcome_info[[y]]$label,
+    N = nobs(models[[y]]),
+    `R-squared` = round(s$r.squared, 3),
+    `Typical error (residual SD)` = round(s$sigma, 2),
+    check.names = FALSE
+  )
+}))
+
+coef_table <- do.call(rbind, lapply(outcome_vars, function(y) {
+  ct <- as.data.frame(coef(summary(models[[y]])))
+  ci <- confint(models[[y]])
+  data.frame(
+    Outcome = outcome_info[[y]]$label,
+    Term = rownames(ct),
+    Estimate = round(ct$Estimate, 3),
+    `CI low` = round(ci[, 1], 3),
+    `CI high` = round(ci[, 2], 3),
+    `p-value` = signif(ct$`Pr(>|t|)`, 3),
+    check.names = FALSE,
+    row.names = NULL
+  )
+}))
+coef_table$Term <- sub("^platform", "Platform: ", coef_table$Term)
+coef_table$Term <- sub(screen_var, "Screen time (per hour)", coef_table$Term)
+
+
+# ------------------------------------------------------------
+# 4. HELPERS
+# ------------------------------------------------------------
+
+clamp <- function(x, lo, hi) pmin(pmax(x, lo), hi)
+
+# Predictions for given platforms and screen time, for all outcomes.
+predict_all <- function(platforms, hours) {
+  newdata <- data.frame(
+    Daily_Screen_Time_Hours = hours,
+    platform = factor(platforms, levels = levels(df$platform))
+  )
+  names(newdata)[1] <- screen_var
+
+  bind_rows(lapply(outcome_vars, function(y) {
+    info <- outcome_info[[y]]
+    ci <- predict(models[[y]], newdata, interval = "confidence")
+    pi <- predict(models[[y]], newdata, interval = "prediction")
+    data.frame(
+      outcome = y,
+      platform = platforms,
+      fit = clamp(ci[, "fit"], info$lower, info$upper),
+      ci_low = clamp(ci[, "lwr"], info$lower, info$upper),
+      ci_high = clamp(ci[, "upr"], info$lower, info$upper),
+      pred_low = clamp(pi[, "lwr"], info$lower, info$upper),
+      pred_high = clamp(pi[, "upr"], info$lower, info$upper),
+      stringsAsFactors = FALSE
+    )
+  }))
+}
+
+gad_category <- function(x) {
+  cut(x, c(-Inf, 4.5, 9.5, 14.5, Inf),
+      labels = c("minimal", "mild", "moderate", "severe"))
+}
+phq_category <- function(x) {
+  cut(x, c(-Inf, 4.5, 9.5, 14.5, 19.5, Inf),
+      labels = c("minimal", "mild", "moderate", "moderately severe", "severe"))
+}
+sleep_category <- function(x) {
+  cut(x, c(-Inf, 6.95, 9.05, Inf),
+      labels = c("below the recommended 7\u20139 h", "within the recommended 7\u20139 h",
+                 "above the recommended 7\u20139 h"))
+}
+
+card_colour <- function(outcome, value) {
+  if (outcome == "Sleep_Duration_Hours") {
+    if (value >= 7 && value <= 9) "#2e7d32" else if (value >= 6) "#ef6c00" else "#c62828"
+  } else if (outcome == "GAD_7_Score") {
+    if (value < 5) "#2e7d32" else if (value < 10) "#f9a825" else if (value < 15) "#ef6c00" else "#c62828"
+  } else {
+    if (value < 5) "#2e7d32" else if (value < 10) "#f9a825" else if (value < 15) "#ef6c00" else "#c62828"
+  }
+}
+
+outcome_card <- function(y, rows) {
+  info <- outcome_info[[y]]
+  est <- mean(rows$fit)
+  p_lo <- mean(rows$pred_low)
+  p_hi <- mean(rows$pred_high)
+
+  category <- switch(
+    y,
+    Sleep_Duration_Hours = as.character(sleep_category(est)),
+    GAD_7_Score = paste0(as.character(gad_category(est)), " range"),
+    PHQ_9_Score = paste0(as.character(phq_category(est)), " range")
+  )
+
+  digits <- if (y == "Sleep_Duration_Hours") 1 else 1
+  range_text <- if (nrow(rows) > 1) {
+    paste0("Across your selected platforms: ",
+           round(min(rows$fit), digits), " to ", round(max(rows$fit), digits))
+  } else {
+    NULL
+  }
+
+  div(
+    class = "outcome-card",
+    style = paste0("border-top: 6px solid ", card_colour(y, est), ";"),
+    div(class = "card-label", info$label),
+    div(class = "card-value", sprintf("%.1f", est)),
+    div(class = "card-unit", info$unit),
+    div(class = "card-category", category),
+    div(class = "card-range",
+        sprintf("Where an individual might fall (95%%): %.1f to %.1f", p_lo, p_hi)),
+    if (!is.null(range_text)) div(class = "card-range", range_text)
+  )
+}
+
+
+# ------------------------------------------------------------
+# 5. USER INTERFACE
+# ------------------------------------------------------------
+
+platform_choices <- setNames(
+  names(platform_n),
+  paste0(names(platform_n), " (n = ", as.integer(platform_n), ")")
+)
+
+ui <- fluidPage(
+  tags$head(tags$style(HTML("
+    body { background: #f6f7f9; }
+    .app-title { margin: 20px 0 4px 0; font-weight: 700; }
+    .app-sub { color: #555; margin-bottom: 20px; }
+    .well { background: #fff; border: 1px solid #e3e6ea; border-radius: 10px; }
+    .outcome-card {
+      background: #fff; border-radius: 10px; padding: 18px 20px;
+      box-shadow: 0 1px 4px rgba(0,0,0,.08); margin-bottom: 15px; min-height: 210px;
+    }
+    .card-label { font-size: 15px; font-weight: 600; color: #444; }
+    .card-value { font-size: 46px; font-weight: 700; line-height: 1.1; }
+    .card-unit { font-size: 12px; color: #777; margin-bottom: 6px; }
+    .card-category { font-size: 15px; font-weight: 600; margin-bottom: 8px; }
+    .card-range { font-size: 12px; color: #666; }
+    .disclaimer {
+      background: #fff8e1; border-left: 4px solid #f9a825; padding: 10px 14px;
+      border-radius: 6px; font-size: 13px; margin-top: 10px;
+    }
+  "))),
+
+  h2(class = "app-title", "Screen time, platform and predicted health outcomes"),
+  p(class = "app-sub",
+    "Tick the platform(s) you use and set your daily screen time to see predicted ",
+    "sleep, anxiety (GAD-7) and depression (PHQ-9) scores."),
+
+  sidebarLayout(
+    sidebarPanel(
+      width = 4,
+      checkboxGroupInput(
+        "platforms", "Which platform(s) do you use?",
+        choices = platform_choices,
+        selected = ref_platform
+      ),
+      sliderInput(
+        "hours", "Daily screen time (hours)",
+        min = screen_min, max = screen_max,
+        value = min(max(screen_mean, screen_min), screen_max),
+        step = 0.1
+      ),
+      helpText(paste0(
+        "The slider covers the screen-time range seen in the data (",
+        screen_min, "\u2013", screen_max, " hours)."
+      )),
+      div(class = "disclaimer",
+          strong("Please note: "),
+          "This is a statistical model of associations in survey data. It does not show ",
+          "that screen time or a platform causes these outcomes, and it is not a ",
+          "diagnosis or medical advice. If you are worried about your mental health, ",
+          "please talk to a healthcare professional.")
+    ),
+
+    mainPanel(
+      width = 8,
+      tabsetPanel(
+        tabPanel(
+          "Your predictions",
+          br(),
+          uiOutput("warning_none"),
+          fluidRow(
+            column(4, uiOutput("card_sleep")),
+            column(4, uiOutput("card_gad")),
+            column(4, uiOutput("card_phq"))
+          ),
+          h4("Predictions by platform"),
+          tableOutput("platform_table"),
+          h4("How the predictions change with screen time"),
+          plotOutput("curve_plot", height = "380px")
+        ),
+        tabPanel(
+          "About the model",
+          br(),
+          p("Each outcome is predicted with a multiple linear regression: ",
+            code("outcome ~ Daily_Screen_Time_Hours + platform"), ". ",
+            "The reference platform is ", strong(ref_platform),
+            " (the most common one); platform coefficients show the difference from it. ",
+            "Platforms with fewer than ", min_group_n, " respondents were excluded."),
+          p("The model data records one platform per respondent, so if you tick several ",
+            "platforms the app shows the prediction for each and the average across them."),
+          h4("Model fit"),
+          tableOutput("fit_table"),
+          p("R-squared is the share of variation in the outcome that the model explains. ",
+            "Low values mean that individuals differ a lot from the prediction, which is ",
+            "why wide ranges are shown."),
+          h4("Coefficients (95% confidence intervals)"),
+          tableOutput("coef_table"),
+          p("GAD-7 (0\u201321) and PHQ-9 (0\u201327) are bounded, often skewed scores, so a linear ",
+            "model is only an approximation. Predictions are clipped to the possible ",
+            "score range.")
+        )
+      )
+    )
+  )
+)
+
+
+# ------------------------------------------------------------
+# 6. SERVER
+# ------------------------------------------------------------
+
+server <- function(input, output, session) {
+
+  preds <- reactive({
+    req(input$platforms, input$hours)
+    predict_all(input$platforms, input$hours)
+  })
+
+  output$warning_none <- renderUI({
+    if (length(input$platforms) == 0) {
+      div(class = "disclaimer", "Please tick at least one platform.")
+    }
+  })
+
+  output$card_sleep <- renderUI({
+    p <- preds()
+    outcome_card("Sleep_Duration_Hours", p[p$outcome == "Sleep_Duration_Hours", ])
+  })
+  output$card_gad <- renderUI({
+    p <- preds()
+    outcome_card("GAD_7_Score", p[p$outcome == "GAD_7_Score", ])
+  })
+  output$card_phq <- renderUI({
+    p <- preds()
+    outcome_card("PHQ_9_Score", p[p$outcome == "PHQ_9_Score", ])
+  })
+
+  output$platform_table <- renderTable({
+    p <- preds()
+    p %>%
+      mutate(
+        Outcome = vapply(outcome, function(o) outcome_info[[o]]$label, character(1)),
+        Prediction = sprintf("%.1f", fit),
+        `95% CI for the average person` = sprintf("%.1f \u2013 %.1f", ci_low, ci_high),
+        `95% range for an individual` = sprintf("%.1f \u2013 %.1f", pred_low, pred_high)
+      ) %>%
+      select(Platform = platform, Outcome, Prediction,
+             `95% CI for the average person`, `95% range for an individual`) %>%
+      arrange(Platform, match(Outcome, vapply(outcome_vars,
+                                              function(o) outcome_info[[o]]$label,
+                                              character(1))))
+  }, striped = TRUE, spacing = "s", width = "100%")
+
+  output$curve_plot <- renderPlot({
+    req(input$platforms, input$hours)
+    grid <- seq(screen_min, screen_max, length.out = 60)
+
+    curve_data <- bind_rows(lapply(input$platforms, function(pl) {
+      newdata <- data.frame(Daily_Screen_Time_Hours = grid,
+                            platform = factor(pl, levels = levels(df$platform)))
+      names(newdata)[1] <- screen_var
+      bind_rows(lapply(outcome_vars, function(y) {
+        info <- outcome_info[[y]]
+        data.frame(
+          hours = grid,
+          platform = pl,
+          outcome = info$label,
+          value = clamp(predict(models[[y]], newdata), info$lower, info$upper)
+        )
+      }))
+    }))
+
+    outcome_labels <- vapply(outcome_vars, function(o) outcome_info[[o]]$label,
+                             character(1))
+    curve_data$outcome <- factor(curve_data$outcome, levels = outcome_labels)
+
+    current <- preds() %>%
+      mutate(outcome = factor(
+        vapply(outcome, function(o) outcome_info[[o]]$label, character(1)),
+        levels = outcome_labels
+      ), hours = input$hours)
+
+    ggplot(curve_data, aes(x = hours, y = value, colour = platform)) +
+      geom_line(linewidth = 1) +
+      geom_vline(xintercept = input$hours, linetype = "dashed", colour = "grey40") +
+      geom_point(data = current, aes(y = fit), size = 3.5) +
+      facet_wrap(~ outcome, scales = "free_y", ncol = 3) +
+      scale_colour_viridis_d(option = "plasma", end = 0.85) +
+      labs(x = "Daily screen time (hours)", y = "Predicted value",
+           colour = "Platform",
+           subtitle = "Dots and dashed line mark your current settings") +
+      theme_minimal(base_size = 12) +
+      theme(legend.position = "bottom")
+  })
+
+  output$fit_table <- renderTable(model_summary_table, striped = TRUE, width = "100%")
+  output$coef_table <- renderTable(coef_table, striped = TRUE, spacing = "s",
+                                   width = "100%")
+}
+
+shinyApp(ui, server)
