@@ -176,6 +176,17 @@ coef_table <- do.call(rbind, lapply(outcome_vars, function(y) {
 coef_table$Term <- sub("^platform", "Platform: ", coef_table$Term)
 coef_table$Term <- sub(screen_var, "Screen time (per hour)", coef_table$Term)
 
+# Lookups used to write the plain-language interpretation
+outcome_stats <- lapply(outcome_vars, function(y) {
+  v <- model.frame(models[[y]])[[1]]
+  list(mean = mean(v), sd = sd(v), values = v)
+})
+names(outcome_stats) <- outcome_vars
+model_coefs <- lapply(models, function(m) coef(summary(m)))
+model_cis <- lapply(models, confint)
+model_r2 <- vapply(models, function(m) summary(m)$r.squared, numeric(1))
+screen_mean_exact <- mean(df[[screen_var]], na.rm = TRUE)
+
 
 # ------------------------------------------------------------
 # 5. HELPERS
@@ -274,9 +285,219 @@ outcome_card <- function(y, rows, idx) {
     div(class = "badge",
         span(class = "badge-dot", style = paste0("background:", cc[[2]], ";")),
         cc[[1]]),
+    div(class = "card-note card-avg", vs_average_text(y, est)),
     div(class = "card-note",
         sprintf("Where an individual might fall (95%%): %.1f to %.1f", p_lo, p_hi)),
     across
+  )
+}
+
+# ---- plain-language interpretation of the model results ----
+
+fmt_num <- function(x, digits = 2) {
+  sub("-", "\u2212", formatC(x, format = "f", digits = digits), fixed = TRUE)
+}
+fmt_p <- function(p) {
+  if (is.na(p)) return("p = n/a")
+  if (p < 0.001) return("p < .001")
+  paste0("p = ", sub("^0", "", sprintf("%.3f", p)))
+}
+fmt_pct <- function(x) sprintf("%.0f%%", 100 * x)
+join_and <- function(x) {
+  if (length(x) <= 1) return(x)
+  paste(paste(x[-length(x)], collapse = ", "), "and", x[length(x)])
+}
+
+magnitude_word <- function(ratio) {
+  ratio <- abs(ratio)
+  if (ratio < 0.05) "tiny"
+  else if (ratio < 0.15) "small"
+  else if (ratio < 0.30) "modest"
+  else "sizeable"
+}
+
+variance_word <- function(r2) {
+  if (r2 < 0.02) "very little"
+  else if (r2 < 0.10) "only a small share"
+  else if (r2 < 0.25) "a modest share"
+  else "a substantial share"
+}
+
+# Describes a change in an outcome, e.g. "0.12 hours less sleep".
+change_phrase <- function(y, b) {
+  if (y == "Sleep_Duration_Hours") {
+    sprintf("%s hours %s sleep", fmt_num(abs(b)), if (b >= 0) "more" else "less")
+  } else {
+    label <- if (y == "GAD_7_Score") "GAD-7" else "PHQ-9"
+    sprintf("a %s-point %s %s score", fmt_num(abs(b)), if (b >= 0) "higher" else "lower", label)
+  }
+}
+
+vs_average_text <- function(y, est) {
+  st <- outcome_stats[[y]]
+  d <- est - st$mean
+  if (y == "Sleep_Duration_Hours") {
+    if (abs(d) < 0.05) return(sprintf("About the same as the average respondent (%.1f h)", st$mean))
+    return(sprintf("%.1f h %s than the average respondent (%.1f h)",
+                   abs(d), if (d > 0) "more" else "less", st$mean))
+  }
+  if (abs(d) < 0.05) return(sprintf("About the same as the average respondent (%.1f)", st$mean))
+  sprintf("%.1f points %s than the average respondent (%.1f)",
+          abs(d), if (d > 0) "higher" else "lower", st$mean)
+}
+
+# One block of explanation for one outcome.
+build_insight <- function(y, r, idx) {
+  info <- outcome_info[[y]]
+  st <- outcome_stats[[y]]
+  cf <- model_coefs[[y]]
+  ci <- model_cis[[y]]
+  is_sleep <- y == "Sleep_Duration_Hours"
+  tag <- if (y == "GAD_7_Score") "GAD-7" else "PHQ-9"
+  
+  rows <- r$preds[r$preds$outcome == y, ]
+  est <- mean(rows$fit)
+  cc <- category_and_colour(y, est)
+  
+  # --- headline ---
+  headline <- if (is_sleep) {
+    sprintf("With %.1f hours of screen time a day, the model predicts about %.1f hours of sleep per night (%s).",
+            r$hours, est, tolower(cc[[1]]))
+  } else {
+    sprintf("With %.1f hours of screen time a day, the model predicts a %s score of about %.1f, in the %s.",
+            r$hours, tag, est, tolower(cc[[1]]))
+  }
+  if (length(r$platforms) > 1) {
+    headline <- paste(headline, "This is the average of the predictions for your platforms.")
+  }
+  
+  # --- comparison with the average respondent ---
+  d <- est - st$mean
+  vs_avg <- if (abs(d) < 0.05) {
+    sprintf("That is about the same as the average respondent (%.1f).", st$mean)
+  } else if (is_sleep) {
+    sprintf("That is %.1f hours %s than the average respondent (%.1f hours).",
+            abs(d), if (d > 0) "more" else "less", st$mean)
+  } else {
+    sprintf("That is %.1f points %s than the average respondent (%.1f).",
+            abs(d), if (d > 0) "higher" else "lower", st$mean)
+  }
+  
+  # --- screen-time association ---
+  b <- cf[screen_var, "Estimate"]
+  p <- cf[screen_var, "Pr(>|t|)"]
+  lo <- ci[screen_var, 1]
+  hi <- ci[screen_var, 2]
+  verdict <- if (p < 0.05) "a statistically clear association" else "not statistically distinguishable from zero"
+  slope_item <- tags$li(
+    tags$strong("Screen time: "),
+    sprintf("in this dataset, each additional hour per day is associated with %s (95%% CI %s to %s; %s), %s. ",
+            change_phrase(y, b), fmt_num(lo), fmt_num(hi), fmt_p(p), verdict),
+    sprintf("Relative to how much people differ from one another (SD = %.1f), this is a %s effect.",
+            st$sd, magnitude_word(b / st$sd))
+  )
+  
+  # --- what your hours mean relative to the average ---
+  gap <- r$hours - screen_mean_exact
+  shift_item <- tags$li(
+    tags$strong("Your hours vs. the average: "),
+    if (abs(gap) < 0.25) {
+      sprintf("your screen time is close to the average in the data (%.1f h/day), so it barely changes how you compare with the average respondent.",
+              screen_mean_exact)
+    } else {
+      sprintf("the average respondent reports %.1f h/day. Your %.1f h/day (%s h %s) corresponds to %s in the model.",
+              screen_mean_exact, r$hours, fmt_num(abs(gap), 1),
+              if (gap > 0) "more" else "less", change_phrase(y, b * gap))
+    }
+  )
+  
+  # --- platform differences ---
+  plat_items <- lapply(r$platforms, function(pl) {
+    if (pl == ref_platform) {
+      return(tags$li(
+        tags$strong(pl, ": "),
+        "this is the reference platform (the most common one in the data); other platforms are compared with it."
+      ))
+    }
+    term <- paste0("platform", pl)
+    if (!term %in% rownames(cf)) return(NULL)
+    pb <- cf[term, "Estimate"]
+    pp <- cf[term, "Pr(>|t|)"]
+    tags$li(
+      tags$strong(pl, ": "),
+      sprintf("compared with %s users at the same screen time, %s users show %s (95%% CI %s to %s; %s, %s).",
+              ref_platform, pl, change_phrase(y, pb),
+              fmt_num(ci[term, 1]), fmt_num(ci[term, 2]), fmt_p(pp),
+              if (pp < 0.05) "statistically clear" else "not statistically clear")
+    )
+  })
+  plat_items <- Filter(Negate(is.null), plat_items)
+  
+  # --- how common is this level? ---
+  common_item <- if (is_sleep) {
+    tags$li(
+      tags$strong("How common: "),
+      sprintf("about %s of respondents slept less than your predicted amount, and %s slept under 7 hours, the minimum that sleep experts recommend for adults.",
+              fmt_pct(mean(st$values < est)), fmt_pct(mean(st$values < 7)))
+    )
+  } else {
+    tags$li(
+      tags$strong("How common: "),
+      sprintf("about %s of respondents scored at or above your predicted level, and %s scored 10 or higher, a cut-off often used to flag people for further assessment (a screening threshold, not a diagnosis).",
+              fmt_pct(mean(st$values >= est)), fmt_pct(mean(st$values >= 10)))
+    )
+  }
+  
+  # --- how much does the model explain? ---
+  r2 <- model_r2[[y]]
+  fit_item <- tags$li(
+    tags$strong("How much this explains: "),
+    sprintf("screen time and platform together account for %s of the differences in %s between people (R\u00b2 = %.2f). Most of the variation comes from factors this model does not include, so treat the prediction as a rough guide, not a personal forecast.",
+            variance_word(r2), tolower(info$label), r2)
+  )
+  
+  div(
+    class = "insight reveal",
+    style = paste0("--i:", idx, "; --a1:", info$accent[1], "; --a2:", info$accent[2], ";"),
+    h5(span(class = "insight-dot"), info$label),
+    p(class = "insight-lead", headline, " ", vs_avg),
+    tags$ul(slope_item, shift_item, plat_items, common_item, fit_item)
+  )
+}
+
+# Short overview paragraph(s) shown above the per-outcome blocks.
+build_takeaways <- function(r) {
+  p_all <- r$preds
+  est <- vapply(outcome_vars, function(y) mean(p_all$fit[p_all$outcome == y]), numeric(1))
+  pv <- vapply(outcome_vars, function(y) model_coefs[[y]][screen_var, "Pr(>|t|)"], numeric(1))
+  sl <- vapply(outcome_vars, function(y) model_coefs[[y]][screen_var, "Estimate"], numeric(1))
+  
+  describe <- c(
+    Sleep_Duration_Hours = if (sl[1] < 0) "shorter sleep" else "longer sleep",
+    GAD_7_Score = if (sl[2] < 0) "lower anxiety (GAD-7) scores" else "higher anxiety (GAD-7) scores",
+    PHQ_9_Score = if (sl[3] < 0) "lower depression (PHQ-9) scores" else "higher depression (PHQ-9) scores"
+  )
+  clear <- outcome_vars[pv < 0.05]
+  
+  plat_txt <- if (length(r$platforms) == 1) {
+    paste0("on ", r$platforms)
+  } else {
+    paste0("across ", join_and(r$platforms))
+  }
+  
+  div(
+    class = "takeaways",
+    p(sprintf("Based on survey data from %s respondents, spending %.1f hours a day on screens %s goes with a predicted %.1f hours of sleep, a GAD-7 anxiety score of %.1f and a PHQ-9 depression score of %.1f.",
+              format(n_total, big.mark = ","), r$hours, plat_txt, est[1], est[2], est[3])),
+    p(if (length(clear) > 0) {
+      paste0("In this dataset, more daily screen time is statistically associated with ",
+             join_and(unname(describe[clear])), ".",
+             if (length(clear) < 3) " The other outcomes show no statistically clear link with screen time." else "")
+    } else {
+      "In this dataset, none of the three outcomes shows a statistically clear linear link with daily screen time."
+    }),
+    p(class = "takeaway-caveat",
+      "These are associations in observational survey data. They do not show that screen time or a platform causes these outcomes: the link may run the other way (poor sleep or low mood can lead to more screen use) or reflect other factors.")
   )
 }
 
@@ -512,6 +733,27 @@ details.glass code { background: rgba(255,255,255,.08); color: #f9a8d4; }
 .btn-back:hover { background: rgba(255,255,255,.12); transform: translateY(-2px); }
 .center { text-align: center; padding-bottom: 20px; }
 
+.card-avg { color: var(--text); font-weight: 500; margin-bottom: 4px; }
+
+/* interpretation section */
+.takeaways { margin-bottom: 22px; padding: 18px 20px; border-radius: 16px;
+             background: linear-gradient(135deg, rgba(139,92,246,.16), rgba(244,114,182,.10));
+             border: 1px solid rgba(167,139,250,.25); }
+.takeaways p { margin: 0 0 10px; line-height: 1.65; font-size: 15px; }
+.takeaways p:last-child { margin-bottom: 0; }
+.takeaways .takeaway-caveat { color: var(--muted); font-size: 13px; }
+.insights-list { display: grid; gap: 16px; }
+.insight { position: relative; padding: 20px 22px 14px 24px; border-radius: 16px;
+           background: rgba(255,255,255,.035); border: 1px solid var(--border); overflow: hidden; }
+.insight::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 4px;
+                   background: linear-gradient(180deg, var(--a1), var(--a2)); }
+.insight h5 { display: flex; align-items: center; gap: 10px; margin: 0 0 8px; font-size: 16px; font-weight: 700; color: var(--text); }
+.insight-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--a1); box-shadow: 0 0 12px var(--a1); }
+.insight-lead { font-size: 15px; line-height: 1.6; margin: 0 0 10px; }
+.insight ul { margin: 0; padding-left: 18px; }
+.insight li { color: #cfcbe8; font-size: 13.5px; line-height: 1.6; margin-bottom: 8px; }
+.insight li strong { color: var(--text); }
+
 .shiny-bound-output.recalculating { opacity: 1 !important; }
 @media (max-width: 560px) {
   .intro { padding: 32px 22px; } .intro h1 { font-size: 31px; } #hours-val { font-size: 52px; }
@@ -570,8 +812,10 @@ app_js <- r"---(
   ];
 
   function startRun() {
-    var cards = document.getElementById('cards');
-    if (cards) cards.innerHTML = '';
+    ['cards', 'takeaways', 'insights'].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) el.innerHTML = '';
+    });
     setStage('loading');
     Shiny.setInputValue('go', Date.now(), { priority: 'event' });
 
@@ -587,7 +831,8 @@ app_js <- r"---(
 
     var started = Date.now();
     setTimeout(function wait() {
-      var ready = document.querySelector('#cards .result-card');
+      var ready = document.querySelector('#cards .result-card') &&
+                  document.querySelector('#insights .insight');
       if (!ready && Date.now() - started < 9000) { setTimeout(wait, 150); return; }
       clearInterval(timer);
       setStage('results');
@@ -725,13 +970,17 @@ ui <- bootstrapPage(
             uiOutput("summary_pills", class = "summary-pills")),
         uiOutput("cards", class = "cards-grid"),
         div(class = "glass section-card reveal", style = "--i:4",
+            h4("What your results mean"),
+            uiOutput("takeaways"),
+            uiOutput("insights", class = "insights-list")),
+        div(class = "glass section-card reveal", style = "--i:5",
             h4("How it changes with screen time"),
             plotOutput("curve_plot", height = "360px")),
-        div(class = "glass section-card reveal", style = "--i:5",
+        div(class = "glass section-card reveal", style = "--i:6",
             h4("Predictions by platform"),
             div(class = "table-scroll", tableOutput("platform_table"))),
         tags$details(
-          class = "glass reveal", style = "--i:6",
+          class = "glass reveal", style = "--i:7",
           tags$summary("About the model and caveats"),
           p("Each outcome is predicted with a multiple linear regression: ",
             code("outcome ~ Daily_Screen_Time_Hours + platform"), ". The reference platform is ",
@@ -748,12 +997,12 @@ ui <- bootstrapPage(
           p("GAD-7 (0\u201321) and PHQ-9 (0\u201327) are bounded, often skewed scores, so a linear model ",
             "is only an approximation. Predictions are clipped to the possible score range.")
         ),
-        div(class = "disclaimer reveal", style = "--i:7",
+        div(class = "disclaimer reveal", style = "--i:8",
             strong("Please note: "),
             "this is a statistical model of associations in survey data. It does not show that screen ",
             "time or a platform causes these outcomes, and it is not a diagnosis or medical advice. ",
             "If you are worried about your mental health, please talk to a healthcare professional."),
-        div(class = "center reveal", style = "--i:8",
+        div(class = "center reveal", style = "--i:9",
             tags$button(id = "back-btn", class = "btn-back", type = "button", "\u2190 Try different inputs"))
       )
     )
@@ -798,6 +1047,19 @@ server <- function(input, output, session) {
       outcome_card("Sleep_Duration_Hours", p[p$outcome == "Sleep_Duration_Hours", ], 1),
       outcome_card("GAD_7_Score", p[p$outcome == "GAD_7_Score", ], 2),
       outcome_card("PHQ_9_Score", p[p$outcome == "PHQ_9_Score", ], 3)
+    )
+  })
+  
+  output$takeaways <- renderUI({
+    build_takeaways(run())
+  })
+  
+  output$insights <- renderUI({
+    r <- run()
+    tagList(
+      build_insight("Sleep_Duration_Hours", r, 1),
+      build_insight("GAD_7_Score", r, 2),
+      build_insight("PHQ_9_Score", r, 3)
     )
   })
   
@@ -853,7 +1115,8 @@ server <- function(input, output, session) {
   output$coef_table <- renderTable(coef_table, spacing = "s", width = "100%")
   
   # Keep outputs live even while their stage is hidden.
-  for (o in c("summary_pills", "cards", "platform_table", "curve_plot",
+  for (o in c("summary_pills", "cards", "takeaways", "insights",
+              "platform_table", "curve_plot",
               "fit_table", "coef_table")) {
     outputOptions(output, o, suspendWhenHidden = FALSE)
   }
