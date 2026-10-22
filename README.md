@@ -43,21 +43,33 @@ This project uses R 4.0 or newer, and RStudio is recommended.
 ## Repository structure
 
 ```text
+## Repository structure
+
+```text
 pips-project/
 ├── data/
 │   ├── alternative_dataset.csv           # Main dataset (adults, Kaggle)
-│   ├── hbsc_data.csv                     # Extra: cleaned HBSC data
-│   └── hbsc_data_descriptions.pdf        # Extra: HBSC variable descriptions
+│   ├── hbsc_data.csv                     # Extra: cleaned HBSC data (adolescents)
+│   ├── hbsc_data_descriptions.pdf        # Extra: HBSC variable descriptions
+│   └── gitkeep
 ├── src/
 │   ├── run_screen_time_analysis.R        # Main analysis function
 │   ├── app.R                             # Shiny app
-│   ├── run_hbsc_analysis.R               # Extra: HBSC analysis function
-│   └── run_social_media_analysis.R       # Extra: simulation and analysis function
+│   ├── run_hbsc_analysis.R               # Extra: HBSC analysis function 
+│   ├── run_social_media_analysis.R       # Extra: simulation check function
+│   ├── Children_data_analysis_final_version.R   # Earlier HBSC script 
+│   ├── improved_social_media_analysis_Debugged.R # Earlier simulation script 
+│   ├── NEWDATA_ANALYSIS_FINAL.r          # Earlier adult-data script 
+│   ├── actualdata_R_CODE_REVISED.R       # Earlier adult-data script 
+│   └── .gitkeep
 ├── outputs/                              # Tables, figures and reports saved by the functions (created when run)
 ├── main.Rmd                              # Main deliverable (explanations + calls to src/)
 ├── pips-project.Rproj                    # RStudio project file
 ├── .gitignore
 └── README.md
+```
+
+Only `main.Rmd`, the three `run_*` functions and `app.R` are needed to run the project. The other scripts in `src/` are earlier versions that the `run_*` functions were built from, and are kept for reference.
 ```
 
 ## Using the project
