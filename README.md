@@ -16,7 +16,7 @@ We study how social media use relates to sleep, anxiety (GAD-7) and depression (
 ## Citation
 
 ```text
-Garcia Sanchez de Mora, L., Van Gaal, J., and Tveit, H.(2026). pips-project: Social media use, sleep, anxiety and depression [R]. GitHub. https://github.com/laura-gsm/pips-project
+Garcia Sanchez de Mora, L., Van Gaalen, J., & Tveit, H. (2026). pips-project: Social media use, sleep, anxiety and depression [Computer software]. GitHub. https://github.com/laura-gsm/pips-project
 ```
 
 **Data sources:**
@@ -36,7 +36,7 @@ cd pips-project
 This project uses R 4.0 or newer, and RStudio is recommended.
 
 1. Open `pips-project.Rproj` in RStudio. This sets the working directory to the project folder so the data files are found.
-2. Open `main.Rmd`. The first code chunk installs any missing packages (see Dependencies below).
+2. Open `main.Rmd`. The the #setup chunk of the main.Rmd installs missing packages (see Dependencies below).
 3. Click "Knit" at the top. This runs the main.Rmd file from top to bottom. The analyses take a short while, because the HBSC file is large.
 4. To start the app, run the chunk in the "The Shiny app" section manually, or run `shiny::runApp("src")` in the console. It opens in a browser window or the RStudio viewer. This chunk is not evaluated when knitting. Press the stop button in the console before running further chunks.
 
@@ -92,11 +92,9 @@ Only `main.Rmd`, the three `run_*` functions and `app.R` are needed to run the p
 
 ## Data
 
-**Main dataset (adults):** `data/alternative_dataset.csv`, from the Kaggle dataset "Social Media and Mental Health" (link above). Per respondent it contains age, gender, primary platform, daily screen time (hours), sleep duration (hours), GAD-7 (0-21), PHQ-9 (0-27), and further variables that the analysis does not use (activity type, late-night usage, social comparison trigger, among others). `run_screen_time_analysis()` checks that the required columns exist and are numeric where expected. It does not delete or impute data.
+**Main dataset (adults):** `data/alternative_dataset.csv`, a local copy of the Kaggle dataset "Social Media and Mental Health" (https://www.kaggle.com/datasets/bertnardomariouskono/social-media-and-mental-health). It contains 8,000 records collected via online surveys. Per respondent it contains age, gender, primary platform, daily screen time (hours), sleep duration (hours), GAD-7 (0-21), PHQ-9 (0-27), and further variables that the analysis does not use (activity type, late-night usage, social comparison trigger, among others). The reported analyses examine daily screen time, social media platform, sleep duration, GAD-7 scores and PHQ-9 scores. `run_screen_time_analysis()` checks that the required columns exist and are numeric where expected. It does not delete or impute data. Results describe statistical associations and should not be interpreted as causal effects or clinical diagnoses.
 
-https://www.kaggle.com/datasets/bertnardomariouskono/social-media-and-mental-health. A local copy is stored as data/alternative_dataset.csv. The reported analyses use 8,000 records and examine daily screen time, social media platform, sleep duration, GAD-7 scores and PHQ-9 scores. This data was collected via online surveys. Results describe statistical associations and should not be interpreted as causal effects or clinical diagnoses.
-**Extra: HBSC data (adolescents):** the Health Behaviour in School-aged Children study. The raw file (122 variables, 420,881 participants) was too large for GitHub, so we reduced it to include only relevant variables for this project. `data/hbsc_data.csv` is the cleaned version, with 33 variables and 180,397 participants. The reduction involved:
-
+** Extra: adolescent data: ** 
 1. **Selecting variables:** we kept only the 33 variables relevant to our question (mental health, physical health and social media use) and dropped the rest.
 2. **Recoding missing values:** the original data codes missing answers as 99, which we set to NA.
 3. **Removing participants with many missing answers:** we excluded participants with more than 2 missing answers. 
@@ -109,20 +107,20 @@ The analysis uses the eight social media items `emcsocmed2` to `emcsocmed9` (cod
 
 ## Dependencies
 
-The first code chunk of `main.Rmd` installs missing packages. The app also installs missing packages when it starts.
+The #setup chunk of the main.Rmd installs missing packages. The app also installs missing packages when it starts.
 
-- Analyses: ggplot2, dplyr, tidyr, purrr, stringr, tibble, readr, broom, car
+- Packages: ggplot2, dplyr, tidyr, purrr, stringr, tibble, readr, broom, car
 - Simulation: MASS, sandwich, lmtest
 - App: shiny (plus ggplot2, dplyr, stringr, tidyr)
 - Main document: knitr, rmarkdown
 
 ## Team responsibilities
 
-| Member | Primary responsibility | Also contributed to |
-|---|---|---|
-| Laura | Project structure, `main.Rmd`, README |
-| Julia | Data simulation / app | Data analyses |
-| Helle | Statistical analyses and visualisations | Building the app |
+| Member | Primary responsibility
+|---|---|
+| Laura | Project structure, `main.Rmd`, README 
+| Julia | Statistical analyses, visualisations, and simulation
+| Helle | Building the app 
 
 All members participated in all roles and tasks
 All members contributed through pull requests and reviewed each other's work on GitHub.
