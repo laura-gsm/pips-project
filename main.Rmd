@@ -1,0 +1,82 @@
+---
+title: "Screen time, platform, sleep and mental health"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+# 1. Introduction
+
+This project looks at how daily screen time and social media platform are associated with sleep, anxiety (GAD-7) and depression (PHQ-9) in adults.
+The results are statistical associations, not causal effects and not a diagnosis.
+
+Data: adult survey dataset in `data/alternative_dataset.csv` (add citation here).
+
+Run this file from top to bottom. Scripts live in `src/`.
+
+# 2. Analysis (adult data)
+
+We fit a linear regression for sleep duration, GAD-7 and PHQ-9, with daily screen time as the predictor, adjusted for age, gender, late-night use, social comparison and activity type. Confidence intervals are heteroskedasticity-robust (HC3).
+
+```{r analysis}
+source("src/analysis.R")
+results <- run_analysis("data/alternative_dataset.csv")
+results$plots$effects
+results$plots$sleep
+```
+
+```{r interpretation, echo=FALSE}
+eff <- results$screen_effects
+get <- function(o, col) round(eff[[col]][eff$outcome == o], 2)
+```
+
+**Interpretation.** After adjusting for age, gender, late-night use, social comparison and activity type, one additional hour of daily screen time is associated with a difference of
+`r get("Sleep_Duration_Hours", "estimate")` hours of sleep
+(95% CI `r get("Sleep_Duration_Hours", "conf_low")` to `r get("Sleep_Duration_Hours", "conf_high")`),
+`r get("GAD_7_Score", "estimate")` GAD-7 points
+(95% CI `r get("GAD_7_Score", "conf_low")` to `r get("GAD_7_Score", "conf_high")`) and
+`r get("PHQ_9_Score", "estimate")` PHQ-9 points
+(95% CI `r get("PHQ_9_Score", "conf_low")` to `r get("PHQ_9_Score", "conf_high")`).
+Intervals that include 0 mean we cannot distinguish the association from no association.
+These are observational associations, not causal effects, and the held-out validation shows how much of the variation the model actually predicts.
+
+# 3. App
+
+The app uses a simpler model than the analysis above: `outcome ~ daily screen time + platform`, with no other covariates, so that users can see differences between platforms.
+Its numbers are therefore not expected to match the adjusted estimates in section 2.
+
+The Shiny app lets users enter their platform(s) and screen time and see predictions.
+Run this chunk manually (it opens the app; stop it before continuing).
+
+```{r app, eval=FALSE}
+shiny::runApp("src")
+```
+
+# 4. Extra: the same question in adolescents (HBSC)
+
+We first explored HBSC teen data, then switched to adults because the app targets adults.
+This section runs the same kind of analysis on the teen data.
+
+```{r hbsc, eval=FALSE}
+source("src/hbsc_analysis.R")
+run_hbsc_analysis()
+```
+
+Add 1-2 sentences here explaining what the result shows.
+
+# 5. Extra: simulation check
+
+We simulate data with known effects and check that the regression recovers them.
+
+```{r simulation, eval=FALSE}
+source("src/simulate_data.R")
+sim <- simulate_data(n = 500, seed = 2026)
+```
+
+Add 1-2 sentences here explaining what the result shows.
+
+# References
+
+Add the dataset citation and any papers here.
