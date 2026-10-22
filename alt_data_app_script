@@ -192,15 +192,34 @@ screen_mean_exact <- mean(df[[screen_var]], na.rm = TRUE)
 # 5. HELPERS
 # ------------------------------------------------------------
 
+#' Restrict values to a range.
+#'
+#' Purpose: keep predictions inside the possible score range of an outcome
+#' (e.g. GAD-7 must stay between 0 and 21).
+#' @param x Numeric vector of values.
+#' @param lo,hi Numeric scalars: lower and upper bound.
+#' @return Numeric vector, same length as `x`, with values limited to [lo, hi].
 clamp <- function(x, lo, hi) pmin(pmax(x, lo), hi)
 
+#' Predict all three outcomes for a given platform selection and screen time.
+#'
+#' Purpose: apply the fitted regression models (outcome ~ screen time +
+#' platform) to the user's inputs, with confidence and prediction intervals.
+#' @param platforms Character vector of platform names; each must be one of
+#'   levels(df$platform).
+#' @param hours Single numeric value: daily screen time in hours.
+#' @return A data.frame with one row per platform x outcome and the columns
+#'   `outcome`, `platform`, `fit` (predicted value), `ci_low`/`ci_high` (95%
+#'   confidence interval for the average person) and `pred_low`/`pred_high`
+#'   (95% prediction interval for an individual). All values are clipped to
+#'   the possible range of the outcome.
 predict_all <- function(platforms, hours) {
   newdata <- data.frame(
     Daily_Screen_Time_Hours = hours,
     platform = factor(platforms, levels = levels(df$platform))
   )
   names(newdata)[1] <- screen_var
-  
+
   bind_rows(lapply(outcome_vars, function(y) {
     info <- outcome_info[[y]]
     ci <- predict(models[[y]], newdata, interval = "confidence")
@@ -218,6 +237,14 @@ predict_all <- function(platforms, hours) {
   }))
 }
 
+#' Classify a predicted value into a descriptive band and a colour.
+#'
+#' Purpose: translate a numeric prediction into the label and colour shown on
+#' the result cards (sleep: recommended 7-9 h; GAD-7 and PHQ-9: minimal to
+#' severe ranges, which are screening bands and not diagnoses).
+#' @param y Character: outcome variable name, one of `outcome_vars`.
+#' @param x Single numeric value: the predicted outcome.
+#' @return A list of length 2: a label (character) and a hex colour (character).
 category_and_colour <- function(y, x) {
   if (y == "Sleep_Duration_Hours") {
     if (x >= 7 && x <= 9) return(list("Within the recommended 7\u20139 h", col_good))
@@ -238,6 +265,16 @@ category_and_colour <- function(y, x) {
   list("Severe range", col_severe)
 }
 
+#' Build the result card for one outcome.
+#'
+#' Purpose: render an animated ring gauge, the predicted value, its band,
+#' the comparison with the average respondent and the 95% individual range.
+#' @param y Character: outcome variable name, one of `outcome_vars`.
+#' @param rows A data.frame: the rows of predict_all() output belonging to
+#'   outcome `y` (one row per selected platform).
+#' @param idx Integer: position of the card, used to stagger its entrance
+#'   animation.
+#' @return A shiny tag (div) with the card HTML.
 outcome_card <- function(y, rows, idx) {
   info <- outcome_info[[y]]
   est <- mean(rows$fit)
@@ -247,7 +284,7 @@ outcome_card <- function(y, rows, idx) {
   frac <- min(max(est / info$gauge_max, 0.02), 1)
   circ <- 2 * pi * 54
   grad_id <- paste0("grad-", y)
-  
+
   ring_svg <- HTML(paste0(
     '<svg class="ring" viewBox="0 0 140 140">',
     '<defs><linearGradient id="', grad_id, '" x1="0" y1="0" x2="1" y2="1">',
@@ -262,13 +299,13 @@ outcome_card <- function(y, rows, idx) {
     'data-frac="', sprintf("%.3f", frac), '"/>',
     '</svg>'
   ))
-  
+
   across <- if (nrow(rows) > 1) {
     div(class = "card-note",
         sprintf("Across your platforms: %.1f to %.1f",
                 min(rows$fit), max(rows$fit)))
   }
-  
+
   div(
     class = "result-card reveal",
     style = paste0("--i:", idx, "; --a1:", info$accent[1], "; --a2:", info$accent[2], ";"),
@@ -294,20 +331,38 @@ outcome_card <- function(y, rows, idx) {
 
 # ---- plain-language interpretation of the model results ----
 
+#' Format a number with a fixed number of decimals and a true minus sign.
+#' @param x Numeric vector.
+#' @param digits Integer: number of decimals (default 2).
+#' @return Character vector.
 fmt_num <- function(x, digits = 2) {
   sub("-", "\u2212", formatC(x, format = "f", digits = digits), fixed = TRUE)
 }
+#' Format a p-value for display (e.g. "p = .034" or "p < .001").
+#' @param p Single numeric p-value (may be NA).
+#' @return Character string.
 fmt_p <- function(p) {
   if (is.na(p)) return("p = n/a")
   if (p < 0.001) return("p < .001")
   paste0("p = ", sub("^0", "", sprintf("%.3f", p)))
 }
+#' Format a proportion as a whole-number percentage.
+#' @param x Numeric vector of proportions between 0 and 1.
+#' @return Character vector such as "42%".
 fmt_pct <- function(x) sprintf("%.0f%%", 100 * x)
+#' Join words into a readable list ("a, b and c").
+#' @param x Character vector.
+#' @return Character string (or `x` unchanged if it has length 0 or 1).
 join_and <- function(x) {
   if (length(x) <= 1) return(x)
   paste(paste(x[-length(x)], collapse = ", "), "and", x[length(x)])
 }
 
+#' Describe the size of an effect in words.
+#'
+#' Purpose: express a regression slope relative to the spread of the outcome.
+#' @param ratio Numeric: slope divided by the outcome's standard deviation.
+#' @return One of "tiny", "small", "modest" or "sizeable".
 magnitude_word <- function(ratio) {
   ratio <- abs(ratio)
   if (ratio < 0.05) "tiny"
@@ -316,6 +371,9 @@ magnitude_word <- function(ratio) {
   else "sizeable"
 }
 
+#' Describe how much variance a model explains in words.
+#' @param r2 Numeric: R-squared of the model (0 to 1).
+#' @return A phrase such as "very little" or "a modest share".
 variance_word <- function(r2) {
   if (r2 < 0.02) "very little"
   else if (r2 < 0.10) "only a small share"
@@ -323,7 +381,14 @@ variance_word <- function(r2) {
   else "a substantial share"
 }
 
-# Describes a change in an outcome, e.g. "0.12 hours less sleep".
+#' Describe a change in an outcome in plain language.
+#'
+#' Purpose: turn a regression coefficient into text such as
+#' "0.12 hours less sleep" or "a 0.20-point higher GAD-7 score".
+#' @param y Character: outcome variable name, one of `outcome_vars`.
+#' @param b Single numeric value: the change in the outcome (a coefficient or
+#'   a coefficient times a difference in hours).
+#' @return Character string.
 change_phrase <- function(y, b) {
   if (y == "Sleep_Duration_Hours") {
     sprintf("%s hours %s sleep", fmt_num(abs(b)), if (b >= 0) "more" else "less")
@@ -333,6 +398,10 @@ change_phrase <- function(y, b) {
   }
 }
 
+#' Compare a predicted value with the average respondent.
+#' @param y Character: outcome variable name, one of `outcome_vars`.
+#' @param est Single numeric value: the predicted outcome.
+#' @return Character string, e.g. "0.8 h less than the average respondent (6.9 h)".
 vs_average_text <- function(y, est) {
   st <- outcome_stats[[y]]
   d <- est - st$mean
@@ -346,7 +415,16 @@ vs_average_text <- function(y, est) {
           abs(d), if (d > 0) "higher" else "lower", st$mean)
 }
 
-# One block of explanation for one outcome.
+#' Build the explanation block for one outcome.
+#'
+#' Purpose: write plain-language, data-based text on the prediction, the
+#' screen-time association, platform differences, how common the level is
+#' and how much the model explains.
+#' @param y Character: outcome variable name, one of `outcome_vars`.
+#' @param r A list with `platforms` (character), `hours` (numeric) and
+#'   `preds` (output of predict_all()).
+#' @param idx Integer: position of the block, used to stagger its animation.
+#' @return A shiny tag (div) with the explanation.
 build_insight <- function(y, r, idx) {
   info <- outcome_info[[y]]
   st <- outcome_stats[[y]]
@@ -354,11 +432,11 @@ build_insight <- function(y, r, idx) {
   ci <- model_cis[[y]]
   is_sleep <- y == "Sleep_Duration_Hours"
   tag <- if (y == "GAD_7_Score") "GAD-7" else "PHQ-9"
-  
+
   rows <- r$preds[r$preds$outcome == y, ]
   est <- mean(rows$fit)
   cc <- category_and_colour(y, est)
-  
+
   # --- headline ---
   headline <- if (is_sleep) {
     sprintf("With %.1f hours of screen time a day, the model predicts about %.1f hours of sleep per night (%s).",
@@ -370,7 +448,7 @@ build_insight <- function(y, r, idx) {
   if (length(r$platforms) > 1) {
     headline <- paste(headline, "This is the average of the predictions for your platforms.")
   }
-  
+
   # --- comparison with the average respondent ---
   d <- est - st$mean
   vs_avg <- if (abs(d) < 0.05) {
@@ -382,7 +460,7 @@ build_insight <- function(y, r, idx) {
     sprintf("That is %.1f points %s than the average respondent (%.1f).",
             abs(d), if (d > 0) "higher" else "lower", st$mean)
   }
-  
+
   # --- screen-time association ---
   b <- cf[screen_var, "Estimate"]
   p <- cf[screen_var, "Pr(>|t|)"]
@@ -396,7 +474,7 @@ build_insight <- function(y, r, idx) {
     sprintf("Relative to how much people differ from one another (SD = %.1f), this is a %s effect.",
             st$sd, magnitude_word(b / st$sd))
   )
-  
+
   # --- what your hours mean relative to the average ---
   gap <- r$hours - screen_mean_exact
   shift_item <- tags$li(
@@ -410,7 +488,7 @@ build_insight <- function(y, r, idx) {
               if (gap > 0) "more" else "less", change_phrase(y, b * gap))
     }
   )
-  
+
   # --- platform differences ---
   plat_items <- lapply(r$platforms, function(pl) {
     if (pl == ref_platform) {
@@ -432,7 +510,7 @@ build_insight <- function(y, r, idx) {
     )
   })
   plat_items <- Filter(Negate(is.null), plat_items)
-  
+
   # --- how common is this level? ---
   common_item <- if (is_sleep) {
     tags$li(
@@ -447,7 +525,7 @@ build_insight <- function(y, r, idx) {
               fmt_pct(mean(st$values >= est)), fmt_pct(mean(st$values >= 10)))
     )
   }
-  
+
   # --- how much does the model explain? ---
   r2 <- model_r2[[y]]
   fit_item <- tags$li(
@@ -455,7 +533,7 @@ build_insight <- function(y, r, idx) {
     sprintf("screen time and platform together account for %s of the differences in %s between people (R\u00b2 = %.2f). Most of the variation comes from factors this model does not include, so treat the prediction as a rough guide, not a personal forecast.",
             variance_word(r2), tolower(info$label), r2)
   )
-  
+
   div(
     class = "insight reveal",
     style = paste0("--i:", idx, "; --a1:", info$accent[1], "; --a2:", info$accent[2], ";"),
@@ -465,26 +543,33 @@ build_insight <- function(y, r, idx) {
   )
 }
 
-# Short overview paragraph(s) shown above the per-outcome blocks.
+#' Build the short overview shown above the per-outcome explanations.
+#'
+#' Purpose: summarise the predictions, state which outcomes show a
+#' statistically clear association with screen time, and add the caveat
+#' that these are associations, not causes.
+#' @param r A list with `platforms` (character), `hours` (numeric) and
+#'   `preds` (output of predict_all()).
+#' @return A shiny tag (div) with the summary paragraphs.
 build_takeaways <- function(r) {
   p_all <- r$preds
   est <- vapply(outcome_vars, function(y) mean(p_all$fit[p_all$outcome == y]), numeric(1))
   pv <- vapply(outcome_vars, function(y) model_coefs[[y]][screen_var, "Pr(>|t|)"], numeric(1))
   sl <- vapply(outcome_vars, function(y) model_coefs[[y]][screen_var, "Estimate"], numeric(1))
-  
+
   describe <- c(
     Sleep_Duration_Hours = if (sl[1] < 0) "shorter sleep" else "longer sleep",
     GAD_7_Score = if (sl[2] < 0) "lower anxiety (GAD-7) scores" else "higher anxiety (GAD-7) scores",
     PHQ_9_Score = if (sl[3] < 0) "lower depression (PHQ-9) scores" else "higher depression (PHQ-9) scores"
   )
   clear <- outcome_vars[pv < 0.05]
-  
+
   plat_txt <- if (length(r$platforms) == 1) {
     paste0("on ", r$platforms)
   } else {
     paste0("across ", join_and(r$platforms))
   }
-  
+
   div(
     class = "takeaways",
     p(sprintf("Based on survey data from %s respondents, spending %.1f hours a day on screens %s goes with a predicted %.1f hours of sleep, a GAD-7 anxiety score of %.1f and a PHQ-9 depression score of %.1f.",
@@ -901,9 +986,9 @@ ui <- bootstrapPage(
     ),
     tags$style(HTML(app_css))
   ),
-  
+
   div(class = "bg-orbs", div(class = "orb o1"), div(class = "orb o2"), div(class = "orb o3")),
-  
+
   # ---------------- STAGE 1: INPUT ----------------
   div(
     id = "stage-input", class = "stage active",
@@ -945,7 +1030,7 @@ ui <- bootstrapPage(
       )
     )
   ),
-  
+
   # ---------------- STAGE 2: LOADING ----------------
   div(
     id = "stage-loading", class = "stage",
@@ -957,7 +1042,7 @@ ui <- bootstrapPage(
       div(class = "load-bar", div(class = "load-bar-fill"))
     )
   ),
-  
+
   # ---------------- STAGE 3: RESULTS ----------------
   div(
     id = "stage-results", class = "stage",
@@ -1007,7 +1092,7 @@ ui <- bootstrapPage(
       )
     )
   ),
-  
+
   tags$script(HTML(app_js))
 )
 
@@ -1017,7 +1102,7 @@ ui <- bootstrapPage(
 # ------------------------------------------------------------
 
 server <- function(input, output, session) {
-  
+
   # Results are computed when the user presses the button.
   run <- eventReactive(input$go, {
     req(input$platforms, input$hours)
@@ -1027,7 +1112,7 @@ server <- function(input, output, session) {
       preds = predict_all(input$platforms, input$hours)
     )
   })
-  
+
   output$summary_pills <- renderUI({
     r <- run()
     tagList(
@@ -1039,7 +1124,7 @@ server <- function(input, output, session) {
       span(class = "pill", sprintf("%.1f h / day", r$hours))
     )
   })
-  
+
   output$cards <- renderUI({
     r <- run()
     p <- r$preds
@@ -1049,11 +1134,11 @@ server <- function(input, output, session) {
       outcome_card("PHQ_9_Score", p[p$outcome == "PHQ_9_Score", ], 3)
     )
   })
-  
+
   output$takeaways <- renderUI({
     build_takeaways(run())
   })
-  
+
   output$insights <- renderUI({
     r <- run()
     tagList(
@@ -1062,7 +1147,7 @@ server <- function(input, output, session) {
       build_insight("PHQ_9_Score", r, 3)
     )
   })
-  
+
   output$platform_table <- renderTable({
     r <- run()
     labels <- vapply(outcome_vars, function(o) outcome_info[[o]]$label, character(1))
@@ -1077,12 +1162,12 @@ server <- function(input, output, session) {
       select(Platform = platform, Outcome, Prediction,
              `95% CI (average person)`, `95% range (individual)`)
   }, spacing = "s", width = "100%")
-  
+
   output$curve_plot <- renderPlot({
     r <- run()
     grid <- seq(screen_min, screen_max, length.out = 60)
     labels <- vapply(outcome_vars, function(o) outcome_info[[o]]$label, character(1))
-    
+
     curve_data <- bind_rows(lapply(r$platforms, function(pl) {
       newdata <- data.frame(Daily_Screen_Time_Hours = grid,
                             platform = factor(pl, levels = levels(df$platform)))
@@ -1094,11 +1179,11 @@ server <- function(input, output, session) {
       }))
     }))
     curve_data$outcome <- factor(curve_data$outcome, levels = unname(labels))
-    
+
     current <- r$preds %>%
       mutate(outcome = factor(unname(labels[outcome]), levels = unname(labels)),
              hours = r$hours)
-    
+
     ggplot(curve_data, aes(x = hours, y = value, colour = platform)) +
       geom_vline(xintercept = r$hours, linetype = "dashed", colour = "#ffffff55") +
       geom_line(linewidth = 1.3, lineend = "round") +
@@ -1110,10 +1195,10 @@ server <- function(input, output, session) {
            subtitle = "Dots and dashed line mark your inputs") +
       dark_theme
   }, bg = "transparent", res = 110)
-  
+
   output$fit_table <- renderTable(model_summary_table, spacing = "s", width = "100%")
   output$coef_table <- renderTable(coef_table, spacing = "s", width = "100%")
-  
+
   # Keep outputs live even while their stage is hidden.
   for (o in c("summary_pills", "cards", "takeaways", "insights",
               "platform_table", "curve_plot",
