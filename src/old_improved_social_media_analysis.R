@@ -349,7 +349,7 @@ p_coef <- ggplot(app_results,
   geom_vline(xintercept = 0, linetype = "dashed", color = "grey50") +
   geom_errorbar(aes(xmin = conf.low, xmax = conf.high),
                 orientation = "y", width = 0.18, color = "#3977A8") +
-  geom_point(size = 2.6, color = "#E76F51") +
+  geom_point(size = 2.6, color = "orange") +
   facet_wrap(~ outcome, scales = "free_x", ncol = 2) +
   labs(
     title = "Adjusted associations between app screen time and outcomes",
