@@ -1,0 +1,1238 @@
+
+# ============================================================
+# SOCIAL MEDIA USE AND WELLBEING: COMPLETE ANALYSIS
+# ============================================================
+# Dataset: actualdata
+##loading in the dataset
+getwd()
+actualdata=read.csv("https://raw.githubusercontent.com/laura-gsm/pips-project/refs/heads/main/hbsc_data.csv", row.names = NULL)
+View(actualdata)
+# Independent variables: emcsocmed1 - emcsocmed9
+# Dependent variables:
+# feellow, irritable, nervous, sleepdificulty, lifesat,
+# physact60, headache, stomachache, backache, dizzy
+#
+# Outputs are saved in: social_media_analysis_results
+#
+# IMPORTANT:
+# - Associations do not demonstrate causation.
+# - Linear regression may not be appropriate for ordinal,
+#   binary, or count outcomes. Review outcome types first.
+# - Cronbach's alpha is meaningful only if the nine social
+#   media items are intended to measure one underlying scale.
+# ============================================================
+
+
+# ============================================================
+# 1. INSTALL AND LOAD PACKAGES
+# ============================================================
+
+required_packages <- c(
+  "tidyverse",
+  "psych",
+  "broom",
+  "car"
+)
+
+installed_packages <- rownames(installed.packages())
+
+for (pkg in required_packages) {
+  if (!pkg %in% installed_packages) {
+    install.packages(pkg)
+  }
+}
+
+library(tidyverse)
+library(psych)
+library(broom)
+library(car)
+
+
+# ============================================================
+# 2. SET UP DATA AND VARIABLES
+# ============================================================
+
+if (!exists("actualdata")) {
+  stop("The dataset 'actualdata' was not found in your R environment.")
+}
+
+df <- actualdata
+
+social_vars <- paste0("emcsocmed", 1:9)
+
+outcome_vars <- c(
+  "feellow",
+  "irritable",
+  "nervous",
+  "sleepdificulty",
+  "lifesat",
+  "physact60",
+  "headache",
+  "stomachache",
+  "backache",
+  "dizzy"
+)
+
+all_vars <- c(social_vars, outcome_vars)
+
+# Check that all expected variables exist.
+missing_vars <- setdiff(all_vars, names(df))
+
+if (length(missing_vars) > 0) {
+  stop(
+    "These variables were not found in actualdata: ",
+    paste(missing_vars, collapse = ", "),
+    "\nCheck the spelling using names(actualdata)."
+  )
+}
+
+# Check for nonnumeric variables before numerical analyses.
+non_numeric_vars <- all_vars[
+  !vapply(df[all_vars], is.numeric, logical(1))
+]
+
+if (length(non_numeric_vars) > 0) {
+  stop(
+    "These variables are not numeric: ",
+    paste(non_numeric_vars, collapse = ", "),
+    ". Review their coding before running the analyses. ",
+    "Do not automatically convert categories to numbers ",
+    "unless their coding is appropriate."
+  )
+}
+
+# Create output folder.
+output_dir <- "social_media_analysis_results"
+
+if (!dir.exists(output_dir)) {
+  dir.create(output_dir, recursive = TRUE)
+}
+
+# Save the variable list and sample size.
+write_csv(
+  tibble(
+    variable = all_vars,
+    variable_group = c(
+      rep("Social media", length(social_vars)),
+      rep("Outcome", length(outcome_vars))
+    )
+  ),
+  file.path(output_dir, "variable_list.csv")
+)
+
+write_csv(
+  tibble(
+    total_rows = nrow(df),
+    total_columns = ncol(df)
+  ),
+  file.path(output_dir, "dataset_information.csv")
+)
+
+cat("\nDataset rows:", nrow(df), "\n")
+cat("Social media variables:", length(social_vars), "\n")
+cat("Outcome variables:", length(outcome_vars), "\n")
+
+# ============================================================
+# 3. MISSING DATA ANALYSIS — CORRECTED
+# ============================================================
+
+missing_summary <- tibble(
+  variable = all_vars,
+  missing_n = vapply(
+    df[all_vars],
+    function(x) sum(is.na(x)),
+    numeric(1)
+  ),
+  non_missing_n = vapply(
+    df[all_vars],
+    function(x) sum(!is.na(x)),
+    numeric(1)
+  )
+) %>%
+  mutate(
+    total_n = nrow(df),
+    missing_percent = if (nrow(df) > 0) {
+      100 * missing_n / nrow(df)
+    } else {
+      NA_real_
+    }
+  ) %>%
+  arrange(desc(missing_percent))
+
+# Export missing-data summary
+write_csv(
+  missing_summary,
+  file.path(output_dir, "missing_data_summary.csv")
+)
+
+# Plot missing-data percentages
+missing_plot <- ggplot(
+  missing_summary,
+  aes(
+    x = reorder(variable, missing_percent),
+    y = missing_percent
+  )
+) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(
+    title = "Percentage of Missing Data by Variable",
+    x = "Variable",
+    y = "Missing values (%)"
+  ) +
+  theme_minimal(base_size = 11)
+
+ggsave(
+  file.path(output_dir, "missing_data_plot.png"),
+  plot = missing_plot,
+  width = 9,
+  height = 6,
+  dpi = 300
+)
+
+
+# ============================================================
+# 4. DESCRIPTIVE STATISTICS
+# ============================================================
+
+descriptive_stats <- map_dfr(all_vars, function(v) {
+  
+  x <- df[[v]]
+  x_nonmissing <- x[!is.na(x)]
+  
+  tibble(
+    variable = v,
+    n = length(x_nonmissing),
+    missing_n = sum(is.na(x)),
+    mean = if (length(x_nonmissing) > 0) {
+      mean(x_nonmissing)
+    } else {
+      NA_real_
+    },
+    sd = if (length(x_nonmissing) > 1) {
+      sd(x_nonmissing)
+    } else {
+      NA_real_
+    },
+    median = if (length(x_nonmissing) > 0) {
+      median(x_nonmissing)
+    } else {
+      NA_real_
+    },
+    min = if (length(x_nonmissing) > 0) {
+      min(x_nonmissing)
+    } else {
+      NA_real_
+    },
+    max = if (length(x_nonmissing) > 0) {
+      max(x_nonmissing)
+    } else {
+      NA_real_
+    },
+    unique_values = n_distinct(x_nonmissing)
+  )
+})
+
+write_csv(
+  descriptive_stats,
+  file.path(output_dir, "descriptive_statistics.csv")
+)
+
+
+# ============================================================
+# 5. FREQUENCY TABLES FOR EACH VARIABLE
+# ============================================================
+
+# Useful for identifying unusual values, response categories,
+# and variables with very few possible values.
+
+for (v in all_vars) {
+  
+  frequency_table <- df %>%
+    transmute(response = .data[[v]]) %>%
+    count(response, name = "frequency") %>%
+    mutate(
+      percentage = 100 * frequency / sum(frequency)
+    ) %>%
+    arrange(response)
+  
+  safe_name <- gsub("[^A-Za-z0-9_]", "_", v)
+  
+  write_csv(
+    frequency_table,
+    file.path(
+      output_dir,
+      paste0("frequency_", safe_name, ".csv")
+    )
+  )
+}
+
+
+# ============================================================
+# 6. RESPONSE DISTRIBUTION PLOTS
+# ============================================================
+
+# Histograms show the distributions of the numeric variables.
+# If a variable is ordinal, use the frequency tables above to
+# inspect its individual response categories as well.
+
+distribution_data <- df %>%
+  select(all_of(all_vars)) %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "variable",
+    values_to = "response"
+  )
+
+distribution_plot <- ggplot(
+  distribution_data,
+  aes(x = response)
+) +
+  geom_histogram(
+    bins = 20,
+    fill = "steelblue",
+    color = "white",
+    na.rm = TRUE
+  ) +
+  facet_wrap(
+    ~ variable,
+    scales = "free",
+    ncol = 4
+  ) +
+  labs(
+    title = "Response Distributions",
+    x = "Response value",
+    y = "Frequency"
+  ) +
+  theme_minimal(base_size = 9)
+
+ggsave(
+  file.path(output_dir, "response_distributions.png"),
+  plot = distribution_plot,
+  width = 13,
+  height = 10,
+  dpi = 300
+)
+
+
+# ============================================================
+# 7. RESPONSE PERCENTAGES
+# ============================================================
+
+# Shows the percentage of nonmissing responses at each observed
+# value. Best interpreted for discrete/ordinal response items.
+# For continuous variables, there may be many distinct values.
+
+response_percentages <- distribution_data %>%
+  filter(!is.na(response)) %>%
+  count(variable, response, name = "frequency") %>%
+  group_by(variable) %>%
+  mutate(
+    percentage = 100 * frequency / sum(frequency)
+  ) %>%
+  ungroup()
+
+write_csv(
+  response_percentages,
+  file.path(output_dir, "response_percentages.csv")
+)
+
+percentage_plot <- ggplot(
+  response_percentages,
+  aes(x = response, y = percentage)
+) +
+  geom_col(fill = "darkseagreen4") +
+  facet_wrap(
+    ~ variable,
+    scales = "free",
+    ncol = 4
+  ) +
+  labs(
+    title = "Response Percentages by Variable",
+    x = "Response value",
+    y = "Percentage of nonmissing responses"
+  ) +
+  theme_minimal(base_size = 9)
+
+ggsave(
+  file.path(output_dir, "response_percentages.png"),
+  plot = percentage_plot,
+  width = 13,
+  height = 10,
+  dpi = 300
+)
+
+
+# ============================================================
+# 8. SPEARMAN CORRELATIONS: ALL 90 ASSOCIATIONS
+# ============================================================
+
+# Spearman correlation measures monotonic association.
+# Each correlation uses respondents with nonmissing values
+# for that specific pair of variables.
+
+safe_spearman <- function(data, x_var, y_var) {
+  
+  pair_data <- data %>%
+    select(all_of(c(x_var, y_var))) %>%
+    drop_na()
+  
+  n_pair <- nrow(pair_data)
+  
+  # A correlation cannot be calculated with fewer than
+  # three observations or with a constant variable.
+  if (
+    n_pair < 3 ||
+    n_distinct(pair_data[[x_var]]) < 2 ||
+    n_distinct(pair_data[[y_var]]) < 2
+  ) {
+    return(
+      tibble(
+        social_variable = x_var,
+        outcome = y_var,
+        n = n_pair,
+        rho = NA_real_,
+        p_value = NA_real_
+      )
+    )
+  }
+  
+  test_result <- tryCatch(
+    cor.test(
+      pair_data[[x_var]],
+      pair_data[[y_var]],
+      method = "spearman",
+      exact = FALSE
+    ),
+    error = function(e) NULL
+  )
+  
+  if (is.null(test_result)) {
+    return(
+      tibble(
+        social_variable = x_var,
+        outcome = y_var,
+        n = n_pair,
+        rho = NA_real_,
+        p_value = NA_real_
+      )
+    )
+  }
+  
+  tibble(
+    social_variable = x_var,
+    outcome = y_var,
+    n = n_pair,
+    rho = unname(test_result$estimate),
+    p_value = test_result$p.value
+  )
+}
+
+cor_results <- expand_grid(
+  social_variable = social_vars,
+  outcome = outcome_vars
+) %>%
+  mutate(
+    result = map2(
+      social_variable,
+      outcome,
+      ~ safe_spearman(df, .x, .y)
+    )
+  ) %>%
+  select(result) %>%
+  unnest(result) %>%
+  mutate(
+    # Benjamini-Hochberg correction across all 90 tests.
+    p_adjusted = p.adjust(p_value, method = "BH"),
+    significant_adjusted = !is.na(p_adjusted) &
+      p_adjusted < 0.05
+  ) %>%
+  arrange(p_adjusted)
+
+write_csv(
+  cor_results,
+  file.path(output_dir, "spearman_correlations.csv")
+)
+
+cat("\nSpearman correlations completed.\n")
+cat(
+  "Associations with BH-adjusted p < .05:",
+  sum(cor_results$significant_adjusted, na.rm = TRUE),
+  "\n"
+)
+
+
+# ============================================================
+# 9. SPEARMAN CORRELATION HEATMAP
+# ============================================================
+
+heatmap_data <- cor_results %>%
+  mutate(
+    social_variable = factor(
+      social_variable,
+      levels = rev(social_vars)
+    ),
+    outcome = factor(
+      outcome,
+      levels = outcome_vars
+    ),
+    significance_label = case_when(
+      is.na(p_adjusted) ~ "",
+      p_adjusted < 0.05 ~ "*",
+      TRUE ~ ""
+    ),
+    label = ifelse(
+      is.na(rho),
+      "NA",
+      paste0(
+        sprintf("%.2f", rho),
+        significance_label
+      )
+    )
+  )
+
+correlation_heatmap <- ggplot(
+  heatmap_data,
+  aes(
+    x = outcome,
+    y = social_variable,
+    fill = rho
+  )
+) +
+  geom_tile(color = "white") +
+  geom_text(
+    aes(label = label),
+    size = 3
+  ) +
+  scale_fill_gradient2(
+    low = "firebrick3",
+    mid = "white",
+    high = "steelblue3",
+    midpoint = 0,
+    limits = c(-1, 1),
+    na.value = "grey85"
+  ) +
+  labs(
+    title = "Spearman Correlations: Social Media and Outcomes",
+    subtitle = "* indicates BH-adjusted p < .05",
+    x = "Outcome",
+    y = "Social media item",
+    fill = "Spearman rho"
+  ) +
+  theme_minimal(base_size = 10) +
+  theme(
+    axis.text.x = element_text(
+      angle = 45,
+      hjust = 1
+    )
+  )
+
+ggsave(
+  file.path(output_dir, "correlation_heatmap.png"),
+  plot = correlation_heatmap,
+  width = 12,
+  height = 7,
+  dpi = 300
+)
+
+
+# ============================================================
+# 10. PLOT THE 20 ASSOCIATIONS WITH THE SMALLEST ADJUSTED P-VALUES
+# ============================================================
+
+# These are the smallest adjusted p-values among the tested
+# associations, not necessarily the largest effect sizes.
+
+top_correlations <- cor_results %>%
+  filter(
+    !is.na(p_adjusted),
+    !is.na(rho)
+  ) %>%
+  arrange(p_adjusted) %>%
+  slice_head(n = 20) %>%
+  mutate(
+    association = paste(
+      social_variable,
+      outcome,
+      sep = " - "
+    ),
+    association = factor(
+      association,
+      levels = rev(association)
+    )
+  )
+
+write_csv(
+  top_correlations,
+  file.path(output_dir, "top_20_correlations.csv")
+)
+
+if (nrow(top_correlations) > 0) {
+  
+  top_correlation_plot <- ggplot(
+    top_correlations,
+    aes(
+      x = association,
+      y = rho,
+      fill = rho
+    )
+  ) +
+    geom_col() +
+    coord_flip() +
+    scale_fill_gradient2(
+      low = "firebrick3",
+      mid = "white",
+      high = "steelblue3",
+      midpoint = 0
+    ) +
+    labs(
+      title = "20 Associations with the Smallest Adjusted P-values",
+      x = "Social media item - outcome",
+      y = "Spearman rho",
+      fill = "Spearman rho"
+    ) +
+    theme_minimal(base_size = 10)
+  
+  ggsave(
+    file.path(output_dir, "top_correlations.png"),
+    plot = top_correlation_plot,
+    width = 10,
+    height = 8,
+    dpi = 300
+  )
+}
+
+
+# ============================================================
+# 11. COMBINED SCATTERPLOT: 90 PANELS
+# ============================================================
+
+# Creates a plot for each social media item-outcome pair.
+# Jitter helps reveal overlapping observations for discrete data.
+# Plot sampling, if needed, does NOT affect the statistical tests.
+
+social_long <- df %>%
+  mutate(.row_id = row_number()) %>%
+  select(.row_id, all_of(social_vars)) %>%
+  pivot_longer(
+    cols = all_of(social_vars),
+    names_to = "social_variable",
+    values_to = "social_value"
+  )
+
+outcome_long <- df %>%
+  mutate(.row_id = row_number()) %>%
+  select(.row_id, all_of(outcome_vars)) %>%
+  pivot_longer(
+    cols = all_of(outcome_vars),
+    names_to = "outcome",
+    values_to = "outcome_value"
+  )
+
+scatter_data <- inner_join(
+  social_long,
+  outcome_long,
+  by = ".row_id"
+) %>%
+  filter(
+    !is.na(social_value),
+    !is.na(outcome_value)
+  )
+
+# Limit the plotting dataset to keep the figure manageable.
+# This sample is only for visualization.
+set.seed(123)
+
+max_plot_pairs <- 50000
+
+if (nrow(scatter_data) > max_plot_pairs) {
+  scatter_data <- scatter_data %>%
+    slice_sample(n = max_plot_pairs)
+}
+
+scatter_plot <- ggplot(
+  scatter_data,
+  aes(
+    x = social_value,
+    y = outcome_value
+  )
+) +
+  geom_jitter(
+    width = 0.12,
+    height = 0.12,
+    alpha = 0.25,
+    size = 0.7
+  ) +
+  geom_smooth(
+    method = "lm",
+    formula = y ~ x,
+    se = FALSE,
+    color = "red",
+    linewidth = 0.5
+  ) +
+  facet_grid(
+    social_variable ~ outcome,
+    scales = "free"
+  ) +
+  labs(
+    title = "Social Media Items and Outcomes",
+    subtitle = paste(
+      "Scatterplots for all 90 pairs;",
+      "plotting observations:",
+      nrow(scatter_data)
+    ),
+    x = "Social media response",
+    y = "Outcome response"
+  ) +
+  theme_minimal(base_size = 7) +
+  theme(
+    axis.text = element_text(size = 5),
+    strip.text = element_text(size = 6)
+  )
+
+ggsave(
+  file.path(output_dir, "combined_scatterplots.png"),
+  plot = scatter_plot,
+  width = 18,
+  height = 13,
+  dpi = 300
+)
+
+
+# ============================================================
+# 12. MULTIPLE LINEAR REGRESSION MODELS
+# ============================================================
+
+# Each model includes all nine social media items as predictors.
+#
+# Interpretation caution:
+# - These models assume a numeric outcome suitable for linear
+#   regression and reasonably appropriate residual behavior.
+# - Binary outcomes usually need logistic regression.
+# - Count outcomes may need Poisson or negative binomial models.
+# - Ordinal outcomes may need ordinal regression.
+#
+# Review your outcome coding before interpreting coefficients.
+
+regression_results_list <- list()
+vif_results_list <- list()
+diagnostics_results_list <- list()
+model_summaries_list <- list()
+regression_models <- list()
+
+for (outcome_var in outcome_vars) {
+  
+  cat("\nRunning regression for:", outcome_var, "\n")
+  
+  model_vars <- c(outcome_var, social_vars)
+  
+  # Complete cases for this particular model.
+  model_data <- df %>%
+    select(all_of(model_vars)) %>%
+    drop_na()
+  
+  n_model <- nrow(model_data)
+  
+  # Check sample size and variation.
+  if (
+    n_model < length(social_vars) + 3 ||
+    n_distinct(model_data[[outcome_var]]) < 2
+  ) {
+    warning(
+      "Skipping regression for ",
+      outcome_var,
+      ": insufficient complete cases or no outcome variation."
+    )
+    next
+  }
+  
+  # Skip if any predictor has no variation in this model sample.
+  constant_predictors <- social_vars[
+    vapply(
+      model_data[social_vars],
+      function(x) n_distinct(x) < 2,
+      logical(1)
+    )
+  ]
+  
+  if (length(constant_predictors) > 0) {
+    warning(
+      "Skipping regression for ",
+      outcome_var,
+      " because these predictors are constant in the model sample: ",
+      paste(constant_predictors, collapse = ", ")
+    )
+    next
+  }
+  
+  regression_formula <- reformulate(
+    social_vars,
+    response = outcome_var
+  )
+  
+  model <- tryCatch(
+    lm(
+      regression_formula,
+      data = model_data
+    ),
+    error = function(e) {
+      warning(
+        "Model failed for ", outcome_var, ": ",
+        conditionMessage(e)
+      )
+      NULL
+    }
+  )
+  
+  if (is.null(model)) {
+    next
+  }
+  
+  regression_models[[outcome_var]] <- model
+  
+  model_summary <- summary(model)
+  
+  # Store coefficient estimates and confidence intervals.
+  tidy_model <- broom::tidy(
+    model,
+    conf.int = TRUE
+  ) %>%
+    mutate(
+      outcome = outcome_var,
+      n = n_model,
+      r_squared = model_summary$r.squared,
+      adjusted_r_squared = model_summary$adj.r.squared
+    )
+  
+  regression_results_list[[outcome_var]] <- tidy_model
+  
+  # Save an individual regression table.
+  safe_outcome_name <- gsub(
+    "[^A-Za-z0-9_]",
+    "_",
+    outcome_var
+  )
+  
+  write_csv(
+    tidy_model,
+    file.path(
+      output_dir,
+      paste0("regression_", safe_outcome_name, ".csv")
+    )
+  )
+  
+  # Save model-level summary statistics.
+  model_summaries_list[[outcome_var]] <- tibble(
+    outcome = outcome_var,
+    n = n_model,
+    r_squared = model_summary$r.squared,
+    adjusted_r_squared = model_summary$adj.r.squared,
+    residual_standard_error = model_summary$sigma,
+    model_p_value = tryCatch(
+      pf(
+        model_summary$fstatistic[1],
+        model_summary$fstatistic[2],
+        model_summary$fstatistic[3],
+        lower.tail = FALSE
+      ),
+      error = function(e) NA_real_
+    )
+  )
+  
+  
+  # VIF: check whether the fitted model has full rank.
+  # Use model$rank rather than model_summary$rank.
+  
+  model_rank <- model$rank
+  number_of_coefficients <- length(coef(model))
+  
+  if (
+    length(model_rank) == 1 &&
+    !is.na(model_rank) &&
+    model_rank == number_of_coefficients
+  ) {
+    
+    vif_output <- tryCatch(
+      car::vif(model),
+      error = function(e) {
+        warning(
+          "VIF calculation failed for ",
+          outcome_var,
+          ": ",
+          conditionMessage(e)
+        )
+        NULL
+      }
+    )
+    
+    if (!is.null(vif_output)) {
+      
+      if (is.matrix(vif_output)) {
+        
+        vif_table <- as.data.frame(vif_output) %>%
+          rownames_to_column("predictor")
+        
+        if ("GVIF" %in% names(vif_table)) {
+          vif_table <- vif_table %>%
+            mutate(
+              adjusted_GVIF = GVIF^(1 / (2 * Df))
+            )
+        }
+        
+      } else {
+        
+        vif_table <- tibble(
+          predictor = names(vif_output),
+          VIF = as.numeric(vif_output)
+        )
+      }
+      
+      vif_table <- vif_table %>%
+        mutate(outcome = outcome_var)
+      
+      vif_results_list[[outcome_var]] <- vif_table
+    }
+    
+  } else {
+    
+    warning(
+      "VIF skipped for ",
+      outcome_var,
+      ": model is rank deficient or its rank could not be checked."
+    )
+  }
+  
+  # Regression diagnostic plots.
+  diagnostic_file <- file.path(
+    output_dir,
+    paste0(
+      "regression_diagnostics_",
+      safe_outcome_name,
+      ".png"
+    )
+  )
+  
+  png(
+    filename = diagnostic_file,
+    width = 1200,
+    height = 1000,
+    res = 130
+  )
+  
+  par(mfrow = c(2, 2))
+  
+  plot(
+    model,
+    which = 1,
+    main = "Residuals vs Fitted"
+  )
+  
+  plot(
+    model,
+    which = 2,
+    main = "Normal Q-Q"
+  )
+  
+  plot(
+    model,
+    which = 3,
+    main = "Scale-Location"
+  )
+  
+  plot(
+    model,
+    which = 5,
+    main = "Residuals vs Leverage"
+  )
+  
+  dev.off()
+  
+  # Record basic residual diagnostics.
+  diagnostics_results_list[[outcome_var]] <- tibble(
+    outcome = outcome_var,
+    n = n_model,
+    rank = model_summary$rank,
+    residual_sd = sd(residuals(model)),
+    residual_mean = mean(residuals(model)),
+    max_abs_standardized_residual = max(
+      abs(rstandard(model)),
+      na.rm = TRUE
+    )
+  )
+  
+  # Save the printed model summary as a text file.
+  capture.output(
+    summary(model),
+    file = file.path(
+      output_dir,
+      paste0(
+        "regression_summary_",
+        safe_outcome_name,
+        ".txt"
+      )
+    )
+  )
+}
+
+
+# ============================================================
+# 13. EXPORT COMBINED REGRESSION RESULTS
+# ============================================================
+
+if (length(regression_results_list) > 0) {
+  
+  regression_results <- bind_rows(
+    regression_results_list
+  )
+  
+  write_csv(
+    regression_results,
+    file.path(output_dir, "all_regression_results.csv")
+  )
+  
+} else {
+  
+  regression_results <- tibble()
+  
+  warning("No regression models were successfully fitted.")
+}
+
+if (length(model_summaries_list) > 0) {
+  
+  model_summaries <- bind_rows(
+    model_summaries_list
+  )
+  
+  write_csv(
+    model_summaries,
+    file.path(output_dir, "regression_model_summaries.csv")
+  )
+}
+
+if (length(vif_results_list) > 0) {
+  
+  vif_results <- bind_rows(
+    vif_results_list
+  )
+  
+  write_csv(
+    vif_results,
+    file.path(output_dir, "regression_vif_results.csv")
+  )
+}
+
+if (length(diagnostics_results_list) > 0) {
+  
+  diagnostics_summary <- bind_rows(
+    diagnostics_results_list
+  )
+  
+  write_csv(
+    diagnostics_summary,
+    file.path(output_dir, "regression_diagnostics_summary.csv")
+  )
+}
+
+
+# ============================================================
+# 14. REGRESSION COEFFICIENT PLOT
+# ============================================================
+
+# Displays predictor estimates and 95% confidence intervals
+# from the multiple regression models.
+# The plot excludes the intercept.
+
+if (
+  nrow(regression_results) > 0 &&
+  all(c("term", "estimate", "conf.low", "conf.high", "outcome")
+      %in% names(regression_results))
+) {
+  
+  coefficient_data <- regression_results %>%
+    filter(term != "(Intercept)") %>%
+    filter(
+      !is.na(estimate),
+      !is.na(conf.low),
+      !is.na(conf.high)
+    ) %>%
+    mutate(
+      outcome = factor(
+        outcome,
+        levels = outcome_vars
+      ),
+      term = factor(
+        term,
+        levels = rev(social_vars)
+      )
+    )
+  
+  if (nrow(coefficient_data) > 0) {
+    
+    coefficient_plot <- ggplot(
+      coefficient_data,
+      aes(
+        x = estimate,
+        y = term
+      )
+    ) +
+      geom_vline(
+        xintercept = 0,
+        linetype = "dashed",
+        color = "grey40"
+      ) +
+      geom_errorbar(
+        aes(
+          xmin = conf.low,
+          xmax = conf.high
+        ),
+        orientation = "y",
+        width = 0.2
+      ) +
+      geom_point(size = 1.8) +
+      facet_wrap(
+        ~ outcome,
+        scales = "free_x",
+        ncol = 2
+      ) +
+      labs(
+        title = "Multiple Regression Coefficients",
+        subtitle = "Points are estimates; bars are 95% confidence intervals",
+        x = "Regression coefficient",
+        y = "Social media predictor"
+      ) +
+      theme_minimal(base_size = 10)
+    
+    ggsave(
+      file.path(
+        output_dir,
+        "regression_coefficient_plot.png"
+      ),
+      plot = coefficient_plot,
+      width = 12,
+      height = 14,
+      dpi = 300
+    )
+  }
+}
+
+
+# ============================================================
+# 15. CRONBACH'S ALPHA FOR THE NINE SOCIAL MEDIA ITEMS
+# ============================================================
+
+# Only interpret Cronbach's alpha if these nine items are
+# intended to measure the same underlying construct.
+#
+# Reverse-code any negatively worded items before calculating
+# alpha, if appropriate for your questionnaire.
+
+social_scale_data <- df %>%
+  select(all_of(social_vars))
+
+if (
+  nrow(social_scale_data) >= 3 &&
+  all(
+    vapply(
+      social_scale_data,
+      function(x) n_distinct(x, na.rm = TRUE) > 1,
+      logical(1)
+    )
+  )
+) {
+  
+  alpha_result <- tryCatch(
+    psych::alpha(
+      social_scale_data,
+      check.keys = FALSE,
+      use = "pairwise"
+    ),
+    error = function(e) {
+      warning(
+        "Cronbach's alpha could not be calculated: ",
+        conditionMessage(e)
+      )
+      NULL
+    }
+  )
+  
+  if (!is.null(alpha_result)) {
+    
+    alpha_summary <- tibble(
+      raw_alpha = alpha_result$total$raw_alpha,
+      standardized_alpha = alpha_result$total$std.alpha,
+      average_r = alpha_result$total$average_r,
+      number_of_items = length(social_vars)
+    )
+    
+    write_csv(
+      alpha_summary,
+      file.path(output_dir, "cronbach_alpha_summary.csv")
+    )
+    
+    alpha_item_stats <- as.data.frame(
+      alpha_result$item.stats
+    ) %>%
+      rownames_to_column("item")
+    
+    write_csv(
+      alpha_item_stats,
+      file.path(output_dir, "cronbach_alpha_item_statistics.csv")
+    )
+    
+    alpha_if_deleted <- as.data.frame(
+      alpha_result$alpha.drop
+    ) %>%
+      rownames_to_column("item")
+    
+    write_csv(
+      alpha_if_deleted,
+      file.path(output_dir, "cronbach_alpha_if_item_deleted.csv")
+    )
+    
+    capture.output(
+      print(alpha_result),
+      file = file.path(
+        output_dir,
+        "cronbach_alpha_full_output.txt"
+      )
+    )
+  }
+  
+} else {
+  
+  message(
+    "Cronbach's alpha skipped: insufficient data ",
+    "or at least one social media item has no variation."
+  )
+}
+
+
+# ============================================================
+# 16. SAVE SESSION INFORMATION
+# ============================================================
+
+capture.output(
+  sessionInfo(),
+  file = file.path(
+    output_dir,
+    "session_information.txt"
+  )
+)
+
+
+# ============================================================
+# 17. FINISHED
+# ============================================================
+
+cat("\n============================================\n")
+cat("ANALYSIS COMPLETED\n")
+cat("============================================\n")
+cat("Results folder:", normalizePath(output_dir), "\n")
+cat("Correlation results: spearman_correlations.csv\n")
+cat("Regression results: all_regression_results.csv\n")
+cat("Regression summaries: regression_model_summaries.csv\n")
+cat("Missing data: missing_data_summary.csv\n")
+cat("Correlation heatmap: correlation_heatmap.png\n")
+cat("Scatterplots: combined_scatterplots.png\n")
+cat("Coefficient plot: regression_coefficient_plot.png\n")
+cat("============================================\n")
