@@ -16,7 +16,7 @@ We study how social media use relates to sleep, anxiety (GAD-7) and depression (
 ## Citation
 
 ```text
-[TODO: add citation for this repository]
+Garcia Sanchez de Mora, L., Van Gaal, J., and Tveit, H.(2026). pips-project: Social media use, sleep, anxiety and depression [R]. GitHub. https://github.com/laura-gsm/pips-project
 ```
 
 **Data sources:**
@@ -55,18 +55,21 @@ pips-project/
 ├── src/
 │   ├── run_screen_time_analysis.R        # Main analysis function
 │   ├── app.R                             # Shiny app
-│   ├── run_hbsc_analysis.R               # Extra: HBSC analysis function 
+│   ├── run_hbsc_analysis.R               # Extra: HBSC analysis function
 │   ├── run_social_media_analysis.R       # Extra: simulation check function
-│   ├── Children_data_analysis_final_version.R   # Earlier HBSC script 
-│   ├── improved_social_media_analysis_Debugged.R # Earlier simulation script 
-│   ├── NEWDATA_ANALYSIS_FINAL.r          # Earlier adult-data script 
-│   ├── actualdata_R_CODE_REVISED.R       # Earlier adult-data script 
+│   ├── Children_data_analysis_final_version.R    # Earlier HBSC script
+│   ├── improved_social_media_analysis_Debugged.R # Earlier simulation script
+│   ├── NEWDATA_ANALYSIS_FINAL.r          # Earlier adult-data script
+│   ├── actualdata_R_CODE_REVISED.R       # Earlier adult-data script
 │   └── .gitkeep
 ├── outputs/                              # Tables, figures and reports saved by the functions (created when run)
 ├── main.Rmd                              # Main deliverable (explanations + calls to src/)
 ├── pips-project.Rproj                    # RStudio project file
 ├── .gitignore
 └── README.md
+```
+
+Only `main.Rmd`, the three `run_*` functions and `app.R` are needed to run the project. The other scripts in `src/` are earlier versions that the `run_*` functions were built from, and are kept for reference.
 ```
 
 Only `main.Rmd`, the three `run_*` functions and `app.R` are needed to run the project. The other scripts in `src/` are earlier versions that the `run_*` functions were built from, and are kept for reference.
@@ -91,9 +94,8 @@ Only `main.Rmd`, the three `run_*` functions and `app.R` are needed to run the p
 
 **Main dataset (adults):** `data/alternative_dataset.csv`, from the Kaggle dataset "Social Media and Mental Health" (link above). Per respondent it contains age, gender, primary platform, daily screen time (hours), sleep duration (hours), GAD-7 (0-21), PHQ-9 (0-27), and further variables that the analysis does not use (activity type, late-night usage, social comparison trigger, among others). `run_screen_time_analysis()` checks that the required columns exist and are numeric where expected. It does not delete or impute data.
 
-[TODO: state the number of respondents, and whether the Kaggle data are real survey data or synthetic, as described on the Kaggle page.]
-
-**Extra: HBSC data (adolescents):** the Health Behaviour in School-aged Children study. The raw file (122 variables, 420,881 participants) was too large for GitHub, so we reduced it. `data/hbsc_data.csv` is the cleaned version, with 33 variables and 180,397 participants. The reduction involved:
+https://www.kaggle.com/datasets/bertnardomariouskono/social-media-and-mental-health. A local copy is stored as data/alternative_dataset.csv. The reported analyses use 8,000 records and examine daily screen time, social media platform, sleep duration, GAD-7 scores and PHQ-9 scores. This data was collected via online surveys. Results describe statistical associations and should not be interpreted as causal effects or clinical diagnoses.
+**Extra: HBSC data (adolescents):** the Health Behaviour in School-aged Children study. The raw file (122 variables, 420,881 participants) was too large for GitHub, so we reduced it to include only relevant variables for this project. `data/hbsc_data.csv` is the cleaned version, with 33 variables and 180,397 participants. The reduction involved:
 
 1. **Selecting variables:** we kept only the 33 variables relevant to our question (mental health, physical health and social media use) and dropped the rest.
 2. **Recoding missing values:** the original data codes missing answers as 99, which we set to NA.
@@ -118,10 +120,11 @@ The first code chunk of `main.Rmd` installs missing packages. The app also insta
 
 | Member | Primary responsibility | Also contributed to |
 |---|---|---|
-| Laura | Project structure, `main.Rmd`, README | [TODO] |
+| Laura | Project structure, `main.Rmd`, README |
 | Julia | Data simulation / app | Data analyses |
 | Helle | Statistical analyses and visualisations | Building the app |
 
+All members participated in all roles and tasks
 All members contributed through pull requests and reviewed each other's work on GitHub.
 
 ## References
