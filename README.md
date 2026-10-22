@@ -99,6 +99,8 @@ Only `main.Rmd`, the three `run_*` functions and `app.R` are needed to run the p
 2. **Recoding missing values:** the original data codes missing answers as 99, which we set to NA.
 3. **Removing participants with many missing answers:** we excluded participants with more than 2 missing answers. 
 
+The Health Behaviour in School-aged Children (HBSC) study is a WHO-collaborative, cross-national survey of adolescents (typically aged 11, 13 and 15) on their health, wellbeing, health behaviours and social environment, and the data are available online at https://www.hbsc.org/data.
+
 The analysis uses the eight social media items `emcsocmed2` to `emcsocmed9` (coded 1 = no, 2 = yes), which are recoded to 0/1 and summed into a score from 0 to 8 for participants who answered all eight. The four outcomes are `feellow`, `nervous`, `sleepdificulty` and `physact60`. Outcome coding is unchanged, so see `data/hbsc_data_descriptions.pdf` for the direction of each variable. Survey weights and clustering are not used. 
 
 **Extra: simulated data:** created inside `run_social_media_analysis()` with a fixed random seed (2026) for reproducibility. The effects are fictional and chosen by us, so the simulation checks the method and gives no evidence about real effects.
@@ -118,9 +120,9 @@ The #setup chunk of the main.Rmd installs missing packages. The app also install
 
 | Member | Primary responsibility
 |---|---|
-| Laura | Project structure, `main.Rmd`, README 
-| Julia | Statistical analyses, visualisations, and simulation
-| Helle | Building the app 
+| Laura | Project structure, `main.Rmd`, README. Also contributed to HBSC data cleaning, and  helped with statistical analyses. 
+| Julia | Statistical analyses and visualisations. Also built the simulation. 
+| Helle | Building the app. Also contributed to data analyses and visualizations. 
 
 All members participated in all roles and tasks
 All members contributed through pull requests and reviewed each other's work on GitHub.
