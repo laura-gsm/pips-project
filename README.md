@@ -37,7 +37,7 @@ This project uses R 4.0 or newer, and RStudio is recommended.
 
 1. Open `pips-project.Rproj` in RStudio. This sets the working directory to the project folder so the data files are found.
 2. Open `main.Rmd`. The first code chunk installs any missing packages (see Dependencies below).
-3. Run `main.Rmd` from top to bottom, or click Knit. The analyses take a short while, because the HBSC file is large.
+3. Click "Knit" at the top. This runs the main.Rmd file from top to bottom. The analyses take a short while, because the HBSC file is large.
 4. To start the app, run the chunk in the "The Shiny app" section manually, or run `shiny::runApp("src")` in the console. It opens in a browser window or the RStudio viewer. This chunk is not evaluated when knitting. Press the stop button in the console before running further chunks.
 
 ## Repository structure
