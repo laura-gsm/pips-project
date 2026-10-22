@@ -1,82 +1,486 @@
 ---
 title: "Screen time, platform, sleep and mental health"
-output: html_document
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = TRUE,
+  error = FALSE,
+  fig.width = 9,
+  fig.height = 6
+)
+
+# main.Rmd should be stored in the repository root.
+# Open pips-project.Rproj before running chunks interactively.
+
+required_packages <- c("ggplot2", "sandwich")
+missing_packages <- required_packages[
+  !vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)
+]
+
+if (length(missing_packages)) {
+  stop(
+    "Install these packages in the R console before knitting: ",
+    paste(missing_packages, collapse = ", "),
+    call. = FALSE
+  )
+}
+
+data_path <- "data/alternative_dataset.csv"
+analysis_path <- "src/analysis.R"
+
+for (path in c(data_path, analysis_path)) {
+  if (!file.exists(path)) {
+    stop("Required file not found: ", path, call. = FALSE)
+  }
+}
+
+source(analysis_path)
+
+outcome_labels <- c(
+  Sleep_Duration_Hours = "Sleep duration (hours)",
+  GAD_7_Score = "Anxiety symptoms (GAD-7 points)",
+  PHQ_9_Score = "Depressive symptoms (PHQ-9 points)"
+)
 ```
 
 # 1. Introduction
 
-This project looks at how daily screen time and social media platform are associated with sleep, anxiety (GAD-7) and depression (PHQ-9) in adults.
-The results are statistical associations, not causal effects and not a diagnosis.
+This project explores how daily screen time and social media platform
+are associated with sleep duration, anxiety symptoms and depressive
+symptoms. The app is intended for adults.
 
-Data: adult survey dataset in `data/alternative_dataset.csv` (add citation here).
+The main analysis uses `data/alternative_dataset.csv`.
+Sleep duration is the primary outcome; GAD-7 and PHQ-9 symptom totals
+are secondary outcomes.
 
-Run this file from top to bottom. Scripts live in `src/`.
+The results describe statistical associations, not causal effects.
+GAD-7 and PHQ-9 scores are not clinical diagnoses.
 
-# 2. Analysis (adult data)
+**Data-source limitation:** the original dataset citation, sampling
+method and whether these records are observed or synthetic still need
+to be verified. Until then, the results should be treated as a
+demonstration of the analysis workflow rather than evidence of
+real-world health risks.
 
-We fit a linear regression for sleep duration, GAD-7 and PHQ-9, with daily screen time as the predictor, adjusted for age, gender, late-night use, social comparison and activity type. Confidence intervals are heteroskedasticity-robust (HC3).
+## Running the project
 
-```{r analysis}
-source("src/analysis.R")
-results <- run_analysis("data/alternative_dataset.csv")
-results$plots$effects
-results$plots$sleep
+Open `pips-project.Rproj` in RStudio and knit this document to HTML.
+
+The main analysis runs automatically and saves tables, figures,
+diagnostics and session information in `outputs/`.
+
+The app and supplementary scripts are not run during knitting.
+
+# 2. Data checks and descriptive statistics
+
+The analysis script checks required columns, missing values, repeated
+or empty IDs, numeric coding, allowed ranges and categorical variation.
+It stops rather than silently deleting or imputing problematic records.
+
+Passing these checks does not establish representativeness,
+measurement quality or independence between records.
+
+```{r data-checks}
+d <- read_screen_data(data_path)
+
+sample_summary <- data.frame(
+  Measure = c(
+    "Records",
+    "Minimum age",
+    "Maximum age",
+    "Records younger than 18"
+  ),
+  Value = c(
+    nrow(d),
+    min(d$Age),
+    max(d$Age),
+    sum(d$Age < 18)
+  )
+)
+
+knitr::kable(sample_summary, caption = "Dataset size and age range")
 ```
 
-```{r interpretation, echo=FALSE}
+```{r population-note, echo=FALSE, results='asis'}
+if (any(d$Age < 18)) {
+  cat(
+    "**Population warning:** the dataset contains records younger ",
+    "than 18. The analysis below retains all validated records, so ",
+    "it should not be described as adults-only. An explicit age ",
+    "eligibility rule is needed before finalising the adult-facing app.\n",
+    sep = ""
+  )
+} else {
+  cat(
+    "All recorded ages are at least 18. This supports describing ",
+    "the recorded sample as adults, but does not verify the ",
+    "dataset's sampling or provenance.\n",
+    sep = ""
+  )
+}
+```
+
+```{r descriptive-statistics}
+descriptive_vars <- c(
+  "Age",
+  "Daily_Screen_Time_Hours",
+  "Sleep_Duration_Hours",
+  "GAD_7_Score",
+  "PHQ_9_Score"
+)
+
+descriptive_table <- do.call(
+  rbind,
+  lapply(descriptive_vars, function(v) {
+    x <- d[[v]]
+    data.frame(
+      Variable = v,
+      N = length(x),
+      Mean = mean(x),
+      SD = stats::sd(x),
+      Median = stats::median(x),
+      Minimum = min(x),
+      Maximum = max(x)
+    )
+  })
+)
+
+knitr::kable(
+  descriptive_table,
+  digits = 2,
+  caption = "Descriptive statistics for the validated dataset"
+)
+```
+
+# 3. Main adjusted analysis
+
+We fit separate linear regressions for sleep duration, GAD-7 and
+PHQ-9. Each model includes daily screen time, age, gender, late-night
+usage, social comparison trigger and activity type.
+
+The screen-time coefficient describes the estimated outcome
+difference associated with one additional daily hour, holding the
+included covariates constant.
+
+Platform is not included in these adjusted models. Sleep is not
+included as a predictor in the symptom models.
+
+Confidence intervals use HC3 heteroskedasticity-robust standard
+errors and an approximate t reference distribution. Holm-adjusted
+p-values cover the three screen-time coefficient tests.
+
+The reported 95% confidence intervals are individual intervals,
+not simultaneous or multiplicity-adjusted intervals.
+
+```{r analysis, include=FALSE}
+# Hide this function's direct printing so results appear only once.
+results <- run_analysis(
+  data_path = data_path,
+  output_dir = "outputs",
+  seed = 2026
+)
+```
+
+## Adjusted screen-time associations
+
+```{r effect-table, echo=FALSE}
 eff <- results$screen_effects
-get <- function(o, col) round(eff[[col]][eff$outcome == o], 2)
+
+effect_table <- data.frame(
+  Outcome = unname(outcome_labels[eff$outcome]),
+  Estimate = eff$estimate,
+  CI_lower = eff$conf_low,
+  CI_upper = eff$conf_high,
+  Raw_p = eff$p_value,
+  Holm_adjusted_p = eff$p_holm
+)
+
+knitr::kable(
+  effect_table,
+  digits = 4,
+  caption = paste(
+    "Adjusted outcome difference per additional",
+    "daily screen-time hour; 95% HC3 confidence intervals"
+  )
+)
 ```
 
-**Interpretation.** After adjusting for age, gender, late-night use, social comparison and activity type, one additional hour of daily screen time is associated with a difference of
-`r get("Sleep_Duration_Hours", "estimate")` hours of sleep
-(95% CI `r get("Sleep_Duration_Hours", "conf_low")` to `r get("Sleep_Duration_Hours", "conf_high")`),
-`r get("GAD_7_Score", "estimate")` GAD-7 points
-(95% CI `r get("GAD_7_Score", "conf_low")` to `r get("GAD_7_Score", "conf_high")`) and
-`r get("PHQ_9_Score", "estimate")` PHQ-9 points
-(95% CI `r get("PHQ_9_Score", "conf_low")` to `r get("PHQ_9_Score", "conf_high")`).
-Intervals that include 0 mean we cannot distinguish the association from no association.
-These are observational associations, not causal effects, and the held-out validation shows how much of the variation the model actually predicts.
+```{r effects-plot, echo=FALSE, fig.height=7}
+print(results$plots$effects)
+```
 
-# 3. App
+```{r interpretation, echo=FALSE, results='asis'}
+for (outcome in names(outcome_labels)) {
+  row <- eff[eff$outcome == outcome, , drop = FALSE]
 
-The app uses a simpler model than the analysis above: `outcome ~ daily screen time + platform`, with no other covariates, so that users can see differences between platforms.
-Its numbers are therefore not expected to match the adjusted estimates in section 2.
+  if (nrow(row) != 1L) {
+    stop("Expected one screen-time estimate for ", outcome)
+  }
 
-The Shiny app lets users enter their platform(s) and screen time and see predictions.
-Run this chunk manually (it opens the app; stop it before continuing).
+  cat(sprintf(
+    paste0(
+      "- **%s:** one additional daily hour of screen time ",
+      "is associated with a signed difference of %.3f outcome ",
+      "units (95%% HC3 CI %.3f to %.3f), holding the included ",
+      "covariates constant.\n"
+    ),
+    outcome_labels[[outcome]],
+    row$estimate,
+    row$conf_low,
+    row$conf_high
+  ))
+}
+
+cat("\n")
+```
+
+Negative estimates indicate lower outcome values; positive estimates
+indicate higher values.
+
+An interval containing zero does not exclude no linear association
+at the corresponding two-sided 5% test level. It does not prove
+that the association is absent. Statistical significance does not
+establish practical importance or causation.
+
+## Unadjusted sleep pattern
+
+```{r sleep-plot, echo=FALSE}
+print(results$plots$sleep)
+```
+
+This plot groups daily screen time into one-hour bins. Points show
+median sleep duration, bars show the middle 50% of sleep values,
+and point size shows the number of records in each bin.
+
+The bars represent variability, not confidence intervals. This
+descriptive plot does not adjust for the other predictors.
+
+# 4. Held-out prediction check
+
+The script uses a reproducible random 80/20 train/test split with
+seed 2026. Models are fitted on the training data and evaluated on
+the held-out test data.
+
+The association estimates above come from models fitted to the full
+validated dataset, not just the training subset.
+
+```{r validation-table, echo=FALSE}
+v <- results$validation
+
+validation_table <- data.frame(
+  Outcome = unname(outcome_labels[v$outcome]),
+  Test_N = v$test_n,
+  RMSE = v$rmse,
+  MAE = v$mae,
+  Baseline_RMSE = v$baseline_rmse,
+  Improvement_over_baseline = v$test_r_squared
+)
+
+knitr::kable(
+  validation_table,
+  digits = 3,
+  caption = "Held-out performance of the adjusted models"
+)
+```
+
+- **RMSE:** root mean squared prediction error; lower is better.
+- **MAE:** mean absolute prediction error; lower is better.
+- **Baseline RMSE:** error from predicting the training-set outcome
+  mean for every test record.
+- **Improvement over baseline:** one minus model squared error
+  divided by baseline squared error. Positive values indicate
+  improvement; negative values indicate worse performance.
+
+The script names the last metric `test_r_squared`. However, its
+denominator uses the training-set mean rather than the test-set
+mean, so it is not the conventional test-set R-squared.
+
+Prediction errors use the units of each outcome. This is one
+internal validation split, not external validation or evidence
+of reliable individual health forecasts.
+
+# 5. Model diagnostics and limitations
+
+```{r diagnostics, echo=FALSE, fig.width=9, fig.height=4.5}
+set.seed(2026)
+
+for (outcome in names(results$models)) {
+  fit <- results$models[[outcome]]
+  ii <- sample.int(
+    stats::nobs(fit),
+    min(2000L, stats::nobs(fit))
+  )
+
+  old_par <- graphics::par(mfrow = c(1, 2))
+
+  tryCatch({
+    graphics::plot(
+      stats::fitted(fit)[ii],
+      stats::residuals(fit)[ii],
+      xlab = "Fitted outcome",
+      ylab = "Residual",
+      main = outcome_labels[[outcome]],
+      pch = 16,
+      col = grDevices::adjustcolor("#176B87", alpha.f = 0.2)
+    )
+    graphics::abline(h = 0, lty = 2)
+    graphics::lines(
+      stats::lowess(stats::fitted(fit), stats::residuals(fit)),
+      col = "#B34444",
+      lwd = 2
+    )
+
+    stats::qqnorm(
+      stats::residuals(fit)[ii],
+      main = "Residual Q-Q plot",
+      pch = 16,
+      cex = 0.5
+    )
+    stats::qqline(
+      stats::residuals(fit)[ii],
+      col = "#B34444"
+    )
+  }, finally = graphics::par(old_par))
+}
+```
+
+Review residual-versus-fitted plots for curvature and uneven spread,
+and Q-Q plots for departures from a normal residual distribution.
+Diagnostic points may be subsampled, but model estimation uses all
+validated records.
+
+Important limitations:
+
+- Reverse direction and unmeasured variables may explain associations.
+- Some adjusted variables could be consequences of screen use rather
+  than confounders; adjustment does not identify causal effects.
+- HC3 standard errors do not correct nonlinearity, dependence between
+  records or an incorrectly specified mean model.
+- GAD-7 and PHQ-9 are bounded totals; linear predictions can fall
+  outside their possible ranges.
+- Sampling, measurement and data provenance still need verification.
+
+The random validation split can also fail if a rare categorical
+level appears only in the test set. If that happens, review the
+category counts and validation strategy rather than silently
+dropping records.
+
+# 6. Supplementary platform analysis
+
+The script `src/analyses_alternative_data` fits simpler models with
+daily screen time and platform as predictors. It also produces
+descriptive statistics, Spearman correlations, platform comparisons
+and interaction tests.
+
+It retains platform categories with at least 30 records and uses
+the most frequent retained category as the reference. Regressions
+use outcome-specific complete cases. Platform analyses are skipped
+if fewer than two usable categories remain.
+
+These models do not include the additional covariates used in
+Section 3, and their standard regression intervals are not HC3
+intervals. Their estimates therefore need not match the main analysis.
+
+**Before running this script:** change its data-loading block to
+read `data/alternative_dataset.csv`, remove `View(actualdata)`,
+and install its dependencies separately.
+
+```{r platform-analysis, eval=FALSE}
+# Run manually from the project root after correcting data loading.
+source("src/analyses_alternative_data")
+```
+
+# 7. Shiny app
+
+The app uses the simpler model specification:
+
+`outcome ~ Daily_Screen_Time_Hours + platform`
+
+It does not use the adjusted models from Section 3.
+
+Selecting several platforms averages their separate predictions.
+It does not estimate the combined effect of using several platforms.
+
+**Before launching:** change the app's data-loading block to read
+the local dataset and install its dependencies separately.
+R 4.0 or later is required because the app uses raw strings.
+
+The app is deliberately not launched during knitting.
 
 ```{r app, eval=FALSE}
-shiny::runApp("src")
+# Run manually from the project root.
+# Source in a separate environment to avoid overwriting report objects.
+app_env <- new.env(parent = globalenv())
+app <- source("src/alt_data_app_script", local = app_env)$value
+shiny::runApp(app)
 ```
 
-# 4. Extra: the same question in adolescents (HBSC)
+## App interpretation caveats
 
-We first explored HBSC teen data, then switched to adults because the app targets adults.
-This section runs the same kind of analysis on the teen data.
+The current app clips predictions and interval endpoints to the
+possible outcome ranges. Clipping does not make these valid
+bounded-outcome intervals.
 
-```{r hbsc, eval=FALSE}
-source("src/hbsc_analysis.R")
-run_hbsc_analysis()
-```
+When multiple platforms are selected, the result cards average
+prediction-interval endpoints. That average is not a valid 95%
+individual prediction interval for combined platform use.
+Per-platform intervals should be displayed instead until this
+is revised.
 
-Add 1-2 sentences here explaining what the result shows.
+Symptom bands applied to predicted means are illustrative, not
+personal screening assessments or diagnoses.
 
-# 5. Extra: simulation check
+# 8. Earlier HBSC exploration and simulation
 
-We simulate data with known effects and check that the regression recovers them.
+The project initially explored adolescent HBSC data before moving
+to an adult-facing app.
 
-```{r simulation, eval=FALSE}
-source("src/simulate_data.R")
-sim <- simulate_data(n = 500, seed = 2026)
-```
+The repository contains `data/hbsc_data.csv` and
+`src/run_hbsc_analysis_R.r`. Their analysis interface and results
+have not yet been checked for this report, so no HBSC analysis is
+executed or interpreted here. Adolescent findings should not
+automatically be generalised to adults.
 
-Add 1-2 sentences here explaining what the result shows.
+The earlier draft also proposed a simulation check. A verified
+simulation workflow has not yet been connected to this report.
 
-# References
+Generating simulated data alone does not show that regression
+recovers known effects. That requires fitting the intended model
+and comparing estimates with the generating values, preferably
+across repeated simulations.
 
-Add the dataset citation and any papers here.
+# 9. Saved outputs
+
+The main analysis writes the following files to `outputs/`:
+
+| File | Contents |
+|---|---|
+| `all_coefficients.csv` | Adjusted coefficients, HC3 intervals and raw p-values |
+| `screen_time_effects.csv` | Screen-time coefficients and Holm-adjusted p-values |
+| `held_out_performance.csv` | Train/test prediction metrics |
+| `adjusted_effects.png` | Adjusted screen-time association plot |
+| `sleep_pattern.png` | Unadjusted binned sleep plot |
+| `model_diagnostics.pdf` | Residual and Q-Q plots |
+| `session_info.txt` | R version and package information |
+
+These files are regenerated when the report is knitted.
+
+The supplementary platform script writes to the separate directory
+`screen_time_analysis_results/`.
+
+# References and data-source status
+
+The original citation and licence for `alternative_dataset.csv`
+still need to be added.
+
+Before submission, verify whether the data are observed or synthetic,
+identify the sampling and measurement procedures, and add the
+relevant source references. A GitHub copy is not a substitute
+for the original dataset source.
